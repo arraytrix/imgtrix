@@ -12,22 +12,28 @@ function getAnonId(): string {
   return id
 }
 
+let posthogReady = false
+
 export function initTelemetry(): void {
   Sentry.init({
     dsn: 'https://9ddbf4c6795bb9aad963ce159556cd2f@o4511221561229312.ingest.us.sentry.io/4511221563457536',
   })
 
-  posthog.init(import.meta.env.VITE_POSTHOG_KEY, {
-    api_host: import.meta.env.VITE_POSTHOG_HOST,
-    autocapture: false,
-    capture_pageview: false,
-    capture_pageleave: false,
-    persistence: 'localStorage',
-  })
-
-  posthog.identify(getAnonId())
+  const posthogKey = import.meta.env.VITE_POSTHOG_KEY
+  const posthogHost = import.meta.env.VITE_POSTHOG_HOST
+  if (posthogKey && posthogHost) {
+    posthog.init(posthogKey, {
+      api_host: posthogHost,
+      autocapture: false,
+      capture_pageview: false,
+      capture_pageleave: false,
+      persistence: 'localStorage',
+    })
+    posthog.identify(getAnonId())
+    posthogReady = true
+  }
 }
 
 export function track(event: string, properties?: Record<string, unknown>): void {
-  posthog.capture(event, properties)
+  if (posthogReady) posthog.capture(event, properties)
 }
