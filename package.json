@@ -1,0 +1,83 @@
+{
+  "name": "imgtrix",
+  "version": "0.1.0",
+  "description": "Photoshop-lite image editor with advanced brush tooling",
+  "author": "Arraytrix",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder",
+    "dist:win": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && electron-builder --win",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:linux": "electron-vite build && electron-builder --linux",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "dependencies": {
+    "@sentry/electron": "^7.11.0",
+    "electron-updater": "^6.8.3",
+    "jszip": "^3.10.1",
+    "posthog-js": "^1.369.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
+    "cross-env": "^10.1.0",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "png2icons": "^2.0.1",
+    "svelte": "^4.2.19",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  },
+  "build": {
+    "appId": "com.imgtrix.app",
+    "productName": "Imgtrix",
+    "copyright": "Copyright © 2026 Arraytrix LLC",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Imgtrix",
+      "include": "resources/installer.nsh"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "resources/icon.icns",
+      "category": "public.app-category.graphics-design"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Graphics"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "arraytrix",
+      "repo": "imgtrix"
+    }
+  }
+}
