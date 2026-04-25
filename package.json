@@ -70,6 +70,7 @@
         "AppImage",
         "deb"
       ],
+      "maintainer": "Arraytrix <devteam@arraytrix.dev>",
       "icon": "resources/icon.png",
       "category": "Graphics"
     },
