@@ -16,8 +16,6 @@ jobs:
         include:
           - os: windows-latest
             script: dist:win
-          - os: macos-latest
-            script: dist:mac
           - os: ubuntu-latest
             script: dist:linux
     runs-on: ${{ matrix.os }}

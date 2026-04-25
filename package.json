@@ -1,7 +1,7 @@
 {
   "name": "imgtrix",
-  "version": "0.1.0",
-  "description": "Photoshop-lite image editor with advanced brush tooling",
+  "version": "0.1.0-beta.1",
+  "description": "Easy to use image editor with advanced brush tooling",
   "author": "Arraytrix",
   "main": "out/main/index.js",
   "scripts": {
@@ -47,8 +47,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "resources/icon.ico",
-      "requestedExecutionLevel": "requireAdministrator"
+      "icon": "resources/icon.ico"
     },
     "nsis": {
       "oneClick": false,
