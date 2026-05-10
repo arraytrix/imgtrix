@@ -1,6 +1,6 @@
 {
   "name": "imgtrix",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.1",
   "description": "Easy to use image editor with advanced brush tooling",
   "author": "Arraytrix",
   "main": "out/main/index.js",
@@ -37,6 +37,9 @@
     "appId": "com.imgtrix.app",
     "productName": "Imgtrix",
     "copyright": "Copyright © 2026 Arraytrix LLC",
+    "extraMetadata": {
+      "description": "Imgtrix"
+    },
     "directories": {
       "output": "dist"
     },
