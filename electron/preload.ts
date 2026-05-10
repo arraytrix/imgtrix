@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('api', {
   },
   getOpenWithFile: (): Promise<string | null> =>
     ipcRenderer.invoke('app:open-with-file'),
+  onOpenFile: (callback: (path: string) => void): void => {
+    ipcRenderer.removeAllListeners('app:open-file')
+    ipcRenderer.on('app:open-file', (_e, path: string) => callback(path))
+  },
   loadSettings: (): Promise<unknown> =>
     ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: unknown): Promise<void> =>
@@ -56,6 +60,7 @@ declare global {
       notifySelectionChanged(hasSelection: boolean): void
       notifyClipboardChanged(hasClipboard: boolean): void
       getOpenWithFile(): Promise<string | null>
+      onOpenFile(callback: (path: string) => void): void
       loadSettings(): Promise<unknown>
       saveSettings(settings: unknown): Promise<void>
       resetSettings(): Promise<unknown>

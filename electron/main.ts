@@ -20,7 +20,17 @@ let hasClipboard = false
 
 // File path passed via "Open with" context menu (process.argv)
 const IMAGE_EXTS = /\.(png|jpe?g|webp|bmp|gif|img)$/i
-const openWithFile: string | null = process.argv.slice(is.dev ? 2 : 1).find(a => !a.startsWith('-') && IMAGE_EXTS.test(a)) ?? null
+function extractImagePath(argv: string[]): string | null {
+  return argv.slice(is.dev ? 2 : 1).find(a => !a.startsWith('-') && IMAGE_EXTS.test(a)) ?? null
+}
+const openWithFile: string | null = extractImagePath(process.argv)
+
+// Single-instance lock — second invocations forward their file to the running window.
+// Without this, every "Open with Imgtrix" launch spawns a separate process.
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+}
 
 function buildMenu(): void {
   const send = (action: string) => mainWindow?.webContents.send('menu:action', action)
@@ -185,6 +195,17 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// Forward "Open with" launches that hit an already-running instance.
+// argv is the full process argv of the second instance; we extract the image path.
+app.on('second-instance', (_e, argv) => {
+  const filePath = extractImagePath(argv)
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+    if (filePath) mainWindow.webContents.send('app:open-file', filePath)
+  }
 })
 
 app.on('window-all-closed', () => {

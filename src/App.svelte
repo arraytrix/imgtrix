@@ -741,18 +741,25 @@
 
     await loadSettings()
 
-    const openWithPath = await window.api.getOpenWithFile()
-    if (openWithPath) {
-      const ls = await fileManager.importImageAsNew(openWithPath)
+    async function openImagePath(path: string, closeBlankInitialTab: boolean): Promise<void> {
+      const ls = await fileManager.importImageAsNew(path)
       const hm = new HistoryManager()
-      const title = openWithPath.split(/[\\/]/).pop() ?? 'Untitled'
+      const title = path.split(/[\\/]/).pop() ?? 'Untitled'
       openInNewTab(ls, hm, title, null)
-      // Close the initial blank tab so only the imported image is shown
-      closeTab(0)
-      // Wait for Svelte to process all store updates, then explicitly re-trigger fit+render
+      if (closeBlankInitialTab) closeTab(0)
       await tick()
       menuAction.set('fit-view')
     }
+
+    const openWithPath = await window.api.getOpenWithFile()
+    if (openWithPath) {
+      // Close the initial blank tab so only the imported image is shown
+      await openImagePath(openWithPath, true)
+    }
+
+    // Subsequent "Open with" launches arrive via the single-instance bridge —
+    // open them as a new tab in this window instead of spawning another process.
+    window.api.onOpenFile((path) => { void openImagePath(path, false) })
 
     function handleKey(e: KeyboardEvent): void {
       if ((e.target as HTMLElement).tagName === 'INPUT') return

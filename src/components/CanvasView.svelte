@@ -31,6 +31,11 @@
   let cursorX = 0, cursorY = 0
   let cursorVisible = false
 
+  // Cached offscreen canvases for the clone-brush hover preview.
+  // Reused every frame to avoid allocating dab/mask textures on each redraw.
+  let clonePreviewDab:  OffscreenCanvas | null = null
+  let clonePreviewMask: OffscreenCanvas | null = null
+
   function requestRender(): void { dirty = true }
 
   function renderLoop(): void {
@@ -46,6 +51,13 @@
     if (!overlayCanvas) return
     const ctx = overlayCanvas.getContext('2d')!
     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
+
+    // Clone hover preview — drawn first so the brush-circle outline below
+    // overlays it on top. Only when a target is set and we're not mid-stroke.
+    if ($activeToolName === 'clone' && cursorVisible && !isDrawing) {
+      const tool = toolManager.activeTool as CloneTool
+      if (tool.sourcePoint) drawClonePreview(ctx, cursorX, cursorY, tool)
+    }
 
     // Brush size preview at cursor (skip for selection tools, move tools, and eyedropper — they have their own cursors)
     if (cursorVisible && !isSelectTool && $activeToolName !== 'eyedropper' && $activeToolName !== 'move' && $activeToolName !== 'move-layer') {
@@ -100,6 +112,79 @@
       const cy = tool.currentSourcePos.y * viewport.zoom + viewport.offsetY
       drawCrosshair(ctx, cx, cy, r, true)
     }
+  }
+
+  function drawClonePreview(
+    ctx: CanvasRenderingContext2D,
+    screenX: number, screenY: number,
+    tool: CloneTool,
+  ): void {
+    // Project source position in document space.
+    // Trace mode locks an offset on the first stroke; before that (and in
+    // non-trace mode) the first dab samples directly from the target point,
+    // so we preview that — what you'd deposit if you clicked right now.
+    const docX = (screenX - viewport.offsetX) / viewport.zoom
+    const docY = (screenY - viewport.offsetY) / viewport.zoom
+    let srcX: number, srcY: number
+    if (tool.trace && tool.traceOffset) {
+      srcX = docX + tool.traceOffset.x
+      srcY = docY + tool.traceOffset.y
+    } else {
+      srcX = tool.sourcePoint!.x
+      srcY = tool.sourcePoint!.y
+    }
+
+    const r = tool.size / 2
+    const d = Math.max(1, Math.ceil(r * 2))
+
+    // (Re)allocate cached canvases when brush size changes
+    if (!clonePreviewDab || clonePreviewDab.width !== d) {
+      clonePreviewDab  = new OffscreenCanvas(d, d)
+      clonePreviewMask = new OffscreenCanvas(d, d)
+    }
+    const dab     = clonePreviewDab!
+    const dabCtx  = dab.getContext('2d')!
+    const mask    = clonePreviewMask!
+    const maskCtx = mask.getContext('2d')!
+
+    // Sample from the active layer (matches CloneTool.drawDab's sampleCanvas behaviour:
+    // doc-space coords used directly as layer-canvas coords).
+    const layer = $layerStack.active
+    dabCtx.clearRect(0, 0, d, d)
+    dabCtx.drawImage(layer.canvas, srcX - r, srcY - r, d, d, 0, 0, d, d)
+
+    // Hardness mask, identical to the real dab path
+    maskCtx.clearRect(0, 0, d, d)
+    maskCtx.beginPath()
+    maskCtx.arc(r, r, r, 0, Math.PI * 2)
+    if (tool.hardness >= 1) {
+      maskCtx.fillStyle = 'rgba(0,0,0,1)'
+    } else {
+      const innerR = Math.max(0, tool.hardness * r - 0.5)
+      const grad = maskCtx.createRadialGradient(r, r, innerR, r, r, r)
+      grad.addColorStop(0, 'rgba(0,0,0,1)')
+      grad.addColorStop(1, 'rgba(0,0,0,0)')
+      maskCtx.fillStyle = grad
+    }
+    maskCtx.fill()
+
+    dabCtx.save()
+    dabCtx.globalCompositeOperation = 'destination-in'
+    dabCtx.drawImage(mask, 0, 0)
+    dabCtx.restore()
+
+    // Composite onto the overlay with rotation / thickness / softness, in screen space
+    const screenR = r * viewport.zoom
+    ctx.save()
+    ctx.globalAlpha = 0.85
+    if (tool.softness > 0.01) {
+      ctx.filter = `blur(${(tool.softness * screenR * 0.5).toFixed(1)}px)`
+    }
+    ctx.translate(screenX, screenY)
+    if (tool.rotation !== 0) ctx.rotate(tool.rotation * Math.PI / 180)
+    if (tool.thickness < 1) ctx.scale(1, Math.max(0.01, tool.thickness))
+    ctx.drawImage(dab, -screenR, -screenR, screenR * 2, screenR * 2)
+    ctx.restore()
   }
 
   function drawBrushPreview(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
@@ -334,6 +419,15 @@
   let isRightDrawing = false
 
   function handlePointerDown(e: PointerEvent): void {
+    // Move focus off any param input so the browser's native Ctrl+Z on the
+    // input doesn't revert typed values when the user later presses undo.
+    // Canvas isn't focusable by default, so a click here normally leaves the
+    // previously-focused input still active.
+    const active = document.activeElement as HTMLElement | null
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA')) {
+      active.blur()
+    }
+
     // Right click → tool right-click action (e.g. clone source, saturation reverse)
     if (e.button === 2) {
       const { x, y } = screenToDoc(e.clientX, e.clientY)

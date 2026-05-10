@@ -199,22 +199,31 @@ export class WarpTool implements Tool {
         const sy = py + this.dispY[i]
         const oi = ((py - ry0) * rw + (px - rx0)) * 4
 
-        const nx = Math.round(sx), ny = Math.round(sy)
-        const s = this.snap(src, W, H, nx, ny)
-        out[oi]   = s[0]
-        out[oi+1] = s[1]
-        out[oi+2] = s[2]
-        out[oi+3] = s[3]
+        // Bilinear sample (matches GPU LINEAR filter — keeps edges smooth under sub-pixel push).
+        if (sx < 0 || sx > W - 1 || sy < 0 || sy > H - 1) {
+          out[oi] = out[oi+1] = out[oi+2] = out[oi+3] = 0
+          continue
+        }
+        const x0 = sx | 0, y0 = sy | 0
+        const x1 = x0 + 1 < W ? x0 + 1 : x0
+        const y1 = y0 + 1 < H ? y0 + 1 : y0
+        const fx = sx - x0, fy = sy - y0
+        const w00 = (1 - fx) * (1 - fy)
+        const w10 = fx * (1 - fy)
+        const w01 = (1 - fx) * fy
+        const w11 = fx * fy
+        const i00 = (y0 * W + x0) * 4
+        const i10 = (y0 * W + x1) * 4
+        const i01 = (y1 * W + x0) * 4
+        const i11 = (y1 * W + x1) * 4
+        out[oi]   = src[i00]   * w00 + src[i10]   * w10 + src[i01]   * w01 + src[i11]   * w11
+        out[oi+1] = src[i00+1] * w00 + src[i10+1] * w10 + src[i01+1] * w01 + src[i11+1] * w11
+        out[oi+2] = src[i00+2] * w00 + src[i10+2] * w10 + src[i01+2] * w01 + src[i11+2] * w11
+        out[oi+3] = src[i00+3] * w00 + src[i10+3] * w10 + src[i01+3] * w01 + src[i11+3] * w11
       }
     }
 
     context.activeLayer.putImageData(new ImageData(out, rw, rh), rx0, ry0)
-  }
-
-  private snap(data: Uint8ClampedArray, w: number, h: number, x: number, y: number): [number, number, number, number] {
-    if (x < 0 || x >= w || y < 0 || y >= h) return [0, 0, 0, 0]
-    const i = (y * w + x) * 4
-    return [data[i], data[i + 1], data[i + 2], data[i + 3]]
   }
 
   private falloff(dist: number, r: number): number {
