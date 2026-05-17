@@ -34,6 +34,15 @@
   WriteRegStr HKCR ".webp\OpenWithProgids" "ImgtrixFile" ""
   WriteRegStr HKCR ".gif\OpenWithProgids"  "ImgtrixFile" ""
 
+  ; ── Clear cached FriendlyAppName for this install path ──────────────────────
+  ; Windows caches the exe's FileDescription in MuiCache the first time it sees
+  ; an exe at a given path. If a previous build wrote a different FileDescription,
+  ; "Open with" keeps showing the stale label forever — even after uninstall —
+  ; until the cache entry is removed. Wipe it here so the new exe's PE resources
+  ; are read fresh on next shell query.
+  DeleteRegValue HKCU "Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache" "$INSTDIR\Imgtrix.exe.FriendlyAppName"
+  DeleteRegValue HKCU "Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache" "$INSTDIR\Imgtrix.exe.ApplicationCompany"
+
   ; ── Notify the shell so context menus update without a reboot ────────────────
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 
@@ -60,6 +69,10 @@
   DeleteRegValue HKCR ".bmp\OpenWithProgids"  "ImgtrixFile"
   DeleteRegValue HKCR ".webp\OpenWithProgids" "ImgtrixFile"
   DeleteRegValue HKCR ".gif\OpenWithProgids"  "ImgtrixFile"
+
+  ; ── Clear cached FriendlyAppName so a fresh install doesn't pick it up ──────
+  DeleteRegValue HKCU "Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache" "$INSTDIR\Imgtrix.exe.FriendlyAppName"
+  DeleteRegValue HKCU "Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache" "$INSTDIR\Imgtrix.exe.ApplicationCompany"
 
   ; ── Notify the shell ─────────────────────────────────────────────────────────
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
