@@ -1,6 +1,6 @@
 {
   "name": "imgtrix",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Easy to use image editor with advanced brush tooling",
   "author": "Arraytrix",
   "main": "out/main/index.js",
