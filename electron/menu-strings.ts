@@ -32,6 +32,7 @@ export const MENU = {
   // Image
   resizeImage:        'Resize Image…',
   canvasSize:         'Canvas Size…',
+  cropToSelection:    'Crop to Selection',
   selectionToNew:     'Move Selection to New Image',
   rotate90CW:         'Rotate 90° Clockwise',
   rotate90CCW:        'Rotate 90° Counter-Clockwise',

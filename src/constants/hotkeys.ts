@@ -14,6 +14,7 @@ export const TOOL_KEYS = {
   eyedropper:  'I',
   fill:        'K',
   clearSelection: 'Esc',
+  cropToSelection: 'R',
 } as const
 
 export const MENU_KEYS = {

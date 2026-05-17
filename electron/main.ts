@@ -71,6 +71,7 @@ function buildMenu(): void {
       submenu: [
         { label: MENU.resizeImage,  click: () => send('resize-image') },
         { label: MENU.canvasSize,   click: () => send('canvas-size') },
+        { label: MENU.cropToSelection, enabled: hasSelection, click: () => send('crop-to-selection') },
         { type: 'separator' },
         { label: MENU.selectionToNew, enabled: hasSelection, click: () => send('selection-to-new-image') },
         { type: 'separator' },

@@ -78,4 +78,29 @@ export class LayerStack {
       ;[this.width, this.height] = [this.height, this.width]
     }
   }
+
+  /**
+   * Crop the canvas (and all layers) to the rectangle (x, y, w, h) in canvas space.
+   * Each layer's pixel buffer is replaced with one sized exactly to the new canvas,
+   * with content shifted to match — so pixels outside the crop region are discarded.
+   * Caller is responsible for clearing history and refreshing the canvasSize store.
+   */
+  cropTo(x: number, y: number, w: number, h: number): void {
+    for (const layer of this.layers) {
+      const newCanvas = new OffscreenCanvas(w, h)
+      const newCtx = newCanvas.getContext('2d')!
+      // Layer pixel (px, py) sits at canvas-space (px + offsetX, py + offsetY).
+      // After cropping, the new canvas origin is (x, y) in old canvas space,
+      // so the same pixel must land at (px + offsetX - x, py + offsetY - y).
+      newCtx.drawImage(layer.canvas, layer.offsetX - x, layer.offsetY - y)
+      layer.canvas = newCanvas
+      layer.ctx = newCtx
+      layer.offsetX = 0
+      layer.offsetY = 0
+      layer.gpuDirty = true
+      layer.modified = true
+    }
+    this.width = w
+    this.height = h
+  }
 }

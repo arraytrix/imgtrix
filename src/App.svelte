@@ -362,6 +362,7 @@
     { key: 'moveLayer',     label: 'Move Layer' },
     { key: 'eyedropper',    label: 'Eyedropper' },
     { key: 'fill',          label: 'Fill' },
+    { key: 'cropToSelection', label: 'Crop to Selection' },
   ]
 
   function openHotkeysDialog(): void {
@@ -779,6 +780,7 @@
       if (k === hk.moveLayer.toUpperCase())      selectMoveLayer()
       if (k === hk.eyedropper.toUpperCase())     selectEyedropper()
       if (k === hk.fill.toUpperCase())           selectFill()
+      if (k === hk.cropToSelection.toUpperCase()) cropToSelection()
     }
     window.addEventListener('keydown', handleKey)
 
@@ -792,7 +794,7 @@
     })
 
     window.api.onMenuAction(async (action) => {
-      const trackableActions = new Set(['new', 'open', 'import', 'import-new', 'save', 'save-as', 'export', 'undo', 'redo', 'new-layer', 'duplicate-layer', 'merge-down', 'merge-all', 'resize-image', 'canvas-size', 'selection-to-new-image'])
+      const trackableActions = new Set(['new', 'open', 'import', 'import-new', 'save', 'save-as', 'export', 'undo', 'redo', 'new-layer', 'duplicate-layer', 'merge-down', 'merge-all', 'resize-image', 'canvas-size', 'selection-to-new-image', 'crop-to-selection'])
       if (trackableActions.has(action)) track('feature_used', { feature: action })
 
       if (action === 'new')      openNewDialog()
@@ -800,6 +802,7 @@
       if (action === 'import')               await importImage()
       if (action === 'import-new')           await importImageAsNew()
       if (action === 'selection-to-new-image') selectionToNewImage()
+      if (action === 'crop-to-selection') cropToSelection()
       if (action === 'save')     await save()
       if (action === 'save-as')  await saveAs()
       if (action === 'export')   await exportImage()
@@ -1099,6 +1102,22 @@
     newLs.layers[0].putImageData(imageData)
     const hm = new HistoryManager()
     openInNewTab(newLs, hm, 'Selection', null)
+  }
+
+  function cropToSelection(): void {
+    const bounds = getSelectionBounds()
+    if (!bounds) return
+    const { cx0, cy0, cw, ch } = bounds
+    const ls = get(layerStack)
+    ls.cropTo(cx0, cy0, cw, ch)
+    toolManager.resize(cw, ch)
+    // Destructive op: discard history like rotate/canvas-size do.
+    get(historyManager).clear()
+    canvasSize.set({ width: cw, height: ch })
+    selection.set(null)
+    markCurrentTabDirty()
+    bump()
+    menuAction.set('fit-view')
   }
 
   async function importImageAsNew(): Promise<void> {

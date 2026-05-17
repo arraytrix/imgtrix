@@ -16,6 +16,7 @@ export interface HotkeySettings {
   eyedropper:     string
   fill:           string
   clearSelection: string
+  cropToSelection: string
 }
 
 export interface AppSettings {
@@ -39,5 +40,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     eyedropper:     TOOL_KEYS.eyedropper,
     fill:           TOOL_KEYS.fill,
     clearSelection: TOOL_KEYS.clearSelection,
+    cropToSelection: TOOL_KEYS.cropToSelection,
   }
 }
