@@ -17,6 +17,8 @@ export interface ToolContext {
   strokeCtx: OffscreenCanvasRenderingContext2D
   canvasWidth: number
   canvasHeight: number
+  /** Current viewport zoom, for tools that need screen-sized hit targets. */
+  zoom: number
   /**
    * The active selection rasterized to document space, or null when nothing is
    * selected. Every tool that writes pixels must leave everything outside it

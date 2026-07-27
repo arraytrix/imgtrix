@@ -19,6 +19,10 @@ interface LayerMeta {
   visible: boolean
   offsetX: number
   offsetY: number
+  // Layers aren't always document-sized (imported images, floating selections).
+  // Absent in files written before this was recorded — fall back to canvas size.
+  width?: number
+  height?: number
 }
 
 export class FileManager {
@@ -42,6 +46,8 @@ export class FileManager {
       visible: l.visible,
       offsetX: l.offsetX,
       offsetY: l.offsetY,
+      width:  l.canvas.width,
+      height: l.canvas.height,
     }))
     zip.file('layers.json', JSON.stringify(layerMetas))
 
@@ -67,7 +73,9 @@ export class FileManager {
 
     stack.reset(manifest.canvasWidth, manifest.canvasHeight)
     for (const meta of layerMetas) {
-      const layer = new Layer(manifest.canvasWidth, manifest.canvasHeight, meta.name)
+      const lw = meta.width  ?? manifest.canvasWidth
+      const lh = meta.height ?? manifest.canvasHeight
+      const layer = new Layer(lw, lh, meta.name)
       layer.blendMode = meta.blendMode
       layer.opacity = meta.opacity
       layer.visible = meta.visible
@@ -77,12 +85,10 @@ export class FileManager {
       const binFile = zip.file(`layers/${meta.id}.bin`)
       if (binFile) {
         const binBuffer = await binFile.async('arraybuffer')
-        const imageData = new ImageData(
-          new Uint8ClampedArray(binBuffer),
-          manifest.canvasWidth,
-          manifest.canvasHeight
-        )
-        layer.putImageData(imageData)
+        // Guard against a truncated/mismatched buffer rather than throwing.
+        if (binBuffer.byteLength === lw * lh * 4) {
+          layer.putImageData(new ImageData(new Uint8ClampedArray(binBuffer), lw, lh))
+        }
       }
 
       stack.layers.push(layer)

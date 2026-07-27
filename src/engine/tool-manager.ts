@@ -4,7 +4,7 @@ import type { LayerStack } from './layer-stack'
 import type { HistoryManager, HistoryEntry } from './history-manager'
 import type { Selection } from './selection'
 import { SelectionMask } from './selection-mask'
-import { selection } from '../store'
+import { selection, viewport } from '../store'
 import { PencilTool } from './tools/pencil'
 
 export class ToolManager {
@@ -111,6 +111,7 @@ export class ToolManager {
       strokeCtx: this.strokeCtx,
       canvasWidth: layerStack.width,
       canvasHeight: layerStack.height,
+      zoom: viewport.zoom,
       // Getter so tools that don't clip (selection, move, eyedropper) never
       // trigger the rasterization.
       get selectionMask(): SelectionMask | null {

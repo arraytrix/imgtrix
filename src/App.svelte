@@ -489,7 +489,9 @@
 
   let mwThreshold = magicWandTool.threshold
   let moveLayerDX = 0; let moveLayerDY = 0
-  let moveSelDX   = 0; let moveSelDY   = 0
+  let moveSelDX   = 0; let moveSelDY   = 0; let moveSelRot = 0
+  // Recomputed whenever the selection changes, which is every transform.
+  $: floatAngle = ($selection, moveTool.angleDegrees)
   $: size      = isPaintbrush ? pSize     : isClone ? cSize     : eSize
   $: opacity   = isPaintbrush ? pOpacity  : isClone ? cOpacity  : eOpacity
   $: hardness  = isPaintbrush ? pHardness : isClone ? cHardness : eHardness
@@ -689,6 +691,16 @@
     const entry = moveTool.nudge(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0)
     if (entry) get(historyManager).push(entry)
     moveSelDX = 0; moveSelDY = 0
+    bump()
+    menuAction.set('render')
+  }
+
+  function onMoveSelectionRotate(e: Event): void {
+    const degrees = Number((e.target as HTMLInputElement).value)
+    if (!degrees) return
+    const entry = moveTool.rotateBy(degrees)
+    if (entry) get(historyManager).push(entry)
+    moveSelRot = 0
     bump()
     menuAction.set('render')
   }
@@ -1154,6 +1166,15 @@
           <input type="number" class="param-num param-num--wide"
             bind:value={moveSelDY}
             on:change={e => onMoveSelectionPos('y', e)} />
+        </div>
+        <div class="tool-group">
+          <span class="label">{PL.rotate} <Tooltip text={PT.rotateSelection} /></span>
+          <input type="number" class="param-num param-num--wide" step="1"
+            bind:value={moveSelRot}
+            on:change={onMoveSelectionRotate} />
+          {#if moveTool.hasFloat() && Math.abs(floatAngle) > 0.01}
+            <span class="sel-info sel-info--muted">{floatAngle.toFixed(1)}°</span>
+          {/if}
         </div>
       {:else}
         <span class="sel-hint">{HINTS.makeSelectionFirst}</span>

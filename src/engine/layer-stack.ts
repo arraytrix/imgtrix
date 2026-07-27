@@ -23,9 +23,10 @@ export class LayerStack {
     return this.layers[this.activeIndex]
   }
 
-  // Insert new layer above the active layer
-  add(name?: string): Layer {
-    const layer = new Layer(this.width, this.height, name)
+  // Insert new layer above the active layer. Layers default to document size,
+  // but may be larger — the compositor places them via offsetX/offsetY.
+  add(name?: string, width = this.width, height = this.height): Layer {
+    const layer = new Layer(width, height, name)
     this.layers.splice(this.activeIndex + 1, 0, layer)
     this.activeIndex += 1
     return layer

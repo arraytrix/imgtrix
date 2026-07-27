@@ -15,6 +15,7 @@ export const PARAM_LABELS = {
   pickedColor: 'Picked Color',
   x:          'X',
   y:          'Y',
+  rotate:     'Rotate',
 } as const
 
 export const PARAM_TOOLTIPS = {
@@ -28,6 +29,7 @@ export const PARAM_TOOLTIPS = {
   strength:   'How intensely the effect is applied per dab. Higher values produce a stronger result each stroke',
   threshold:  'How different a neighboring pixel\'s color can be from the clicked pixel and still be included in the selection. Higher values select broader color ranges.',
   sampleSize: 'Diameter of the sampling region in pixels. 1 = single pixel, 3 = 3×3 average, etc.',
+  rotateSelection: 'Rotate the floating selection by this many degrees. You can also drag the round handle above the selection — hold Shift to snap to 15° steps',
   trace:      'When on, the clone source follows your cursor at the original offset — lets you paint continuously without resetting the source point',
   satMode:    'Saturate boosts color intensity; Desaturate pulls toward grayscale',
   dodgeMode:  'Lighten pushes pixels toward white; Darken pushes pixels toward black',

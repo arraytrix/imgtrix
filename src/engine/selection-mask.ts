@@ -1,5 +1,97 @@
 import type { Selection } from './selection'
 
+/** Axis-aligned document-space bounds of a selection of any type. */
+export function selectionBounds(sel: Selection): { x: number; y: number; w: number; h: number } {
+  if (sel.type === 'lasso') {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const p of sel.points) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }
+  return { x: sel.x, y: sel.y, w: sel.w, h: sel.h }
+}
+
+/**
+ * Rotate a selection's shape by `angle` radians about the document-space point
+ * (cx, cy). Rectangles become lassos, since a rotated rect is no longer
+ * axis-aligned; bitmap masks are re-rasterized through the same rotation the
+ * pixels get, so outline and content stay in step.
+ */
+export function rotateSelectionShape(
+  sel: Selection, cx: number, cy: number, angle: number
+): Selection {
+  if (angle === 0) return sel
+  const cos = Math.cos(angle), sin = Math.sin(angle)
+  const spin = (x: number, y: number): { x: number; y: number } => {
+    const dx = x - cx, dy = y - cy
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }
+  }
+
+  if (sel.type === 'lasso') {
+    return { type: 'lasso', points: sel.points.map(p => spin(p.x, p.y)) }
+  }
+
+  if (sel.type === 'rect') {
+    return {
+      type: 'lasso',
+      points: [
+        spin(sel.x, sel.y),
+        spin(sel.x + sel.w, sel.y),
+        spin(sel.x + sel.w, sel.y + sel.h),
+        spin(sel.x, sel.y + sel.h),
+      ],
+    }
+  }
+
+  // Bitmap mask: draw it rotated, then read the coverage back out.
+  const d  = Math.ceil(Math.hypot(sel.w, sel.h)) + 2
+  const cv = new OffscreenCanvas(d, d)
+  const ctx = cv.getContext('2d')!
+  const src = new OffscreenCanvas(sel.w, sel.h)
+  const sctx = src.getContext('2d')!
+  const img = sctx.createImageData(sel.w, sel.h)
+  for (let i = 0; i < sel.data.length; i++) {
+    if (sel.data[i]) img.data[i * 4 + 3] = 255
+  }
+  sctx.putImageData(img, 0, 0)
+
+  // The mask's own centre is what rotates about (cx, cy), so draw it rotated
+  // in place and then shift by however far that centre moved.
+  ctx.translate(d / 2, d / 2)
+  ctx.rotate(angle)
+  ctx.drawImage(src, -sel.w / 2, -sel.h / 2)
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+
+  const moved = spin(sel.x + sel.w / 2, sel.y + sel.h / 2)
+  const originX = Math.round(moved.x - d / 2)
+  const originY = Math.round(moved.y - d / 2)
+
+  const px = ctx.getImageData(0, 0, d, d).data
+  let minX = d, minY = d, maxX = -1, maxY = -1
+  const full = new Uint8Array(d * d)
+  for (let row = 0; row < d; row++) {
+    for (let col = 0; col < d; col++) {
+      if (px[(row * d + col) * 4 + 3] >= 128) {
+        full[row * d + col] = 1
+        if (col < minX) minX = col; if (col > maxX) maxX = col
+        if (row < minY) minY = row; if (row > maxY) maxY = row
+      }
+    }
+  }
+  if (maxX < 0) return sel  // rotated to nothing; keep what we had
+
+  const tw = maxX - minX + 1, th = maxY - minY + 1
+  const data = new Uint8Array(tw * th)
+  for (let row = 0; row < th; row++) {
+    for (let col = 0; col < tw; col++) {
+      data[row * tw + col] = full[(minY + row) * d + (minX + col)]
+    }
+  }
+  return { type: 'mask', x: originX + minX, y: originY + minY, w: tw, h: th, data }
+}
+
 /**
  * A selection rasterized to document space, built once per stroke.
  *

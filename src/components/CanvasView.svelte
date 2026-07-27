@@ -6,6 +6,8 @@
   } from '../store'
   import type { HistoryEntry } from '../engine/tools/tool'
   import type { CloneTool } from '../engine/tools/clone'
+  import type { MoveTool } from '../engine/tools/move'
+  import { invalidateFloatingSelection } from '../engine/tools/move'
 
   let canvas: HTMLCanvasElement
   let overlayCanvas: HTMLCanvasElement
@@ -30,6 +32,8 @@
   // Cursor position in screen space (for brush preview overlay)
   let cursorX = 0, cursorY = 0
   let cursorVisible = false
+  // True while the pointer is over the move tool's rotation handle
+  let overRotateHandle = false
 
   // Cached offscreen canvases for the clone-brush hover preview.
   // Reused every frame to avoid allocating dab/mask textures on each redraw.
@@ -86,6 +90,12 @@
       } else {
         drawMarchingAntsMask(ctx, $selection)
       }
+
+      // Rotation handle — only the move tool can act on it
+      if ($activeToolName === 'move') {
+        const h = (toolManager.activeTool as MoveTool).getRotateHandle($selection, viewport.zoom)
+        if (h) drawRotateHandle(ctx, h)
+      }
     }
 
     if ($activeToolName !== 'clone') return
@@ -112,6 +122,35 @@
       const cy = tool.currentSourcePos.y * viewport.zoom + viewport.offsetY
       drawCrosshair(ctx, cx, cy, r, true)
     }
+  }
+
+  function drawRotateHandle(
+    ctx: CanvasRenderingContext2D,
+    h: { hx: number; hy: number; cx: number; cy: number }
+  ): void {
+    const sx = h.hx * viewport.zoom + viewport.offsetX
+    const sy = h.hy * viewport.zoom + viewport.offsetY
+    const cx = h.cx * viewport.zoom + viewport.offsetX
+    const cy = h.cy * viewport.zoom + viewport.offsetY
+
+    ctx.save()
+    ctx.setLineDash([3, 3])
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.lineTo(sx, sy)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    ctx.beginPath()
+    ctx.arc(sx, sy, 6, 0, Math.PI * 2)
+    ctx.fillStyle = overRotateHandle ? '#fff' : 'rgba(255,255,255,0.85)'
+    ctx.fill()
+    ctx.lineWidth = 1.5
+    ctx.strokeStyle = '#000'
+    ctx.stroke()
+    ctx.restore()
   }
 
   function drawClonePreview(
@@ -472,6 +511,16 @@
     if (isDrawing || isRightDrawing) {
       const { x, y } = screenToDoc(e.clientX, e.clientY)
       toolManager.handlePointerMove(x, y, e.pressure || 1, e.buttons, $layerStack, $historyManager, requestRender)
+      return
+    }
+
+    // Hover feedback for the rotation handle
+    if ($activeToolName === 'move' && $selection) {
+      const { x, y } = screenToDoc(e.clientX, e.clientY)
+      const h = (toolManager.activeTool as MoveTool).getRotateHandle($selection, viewport.zoom)
+      overRotateHandle = h !== null && Math.hypot(x - h.hx, y - h.hy) <= 12 / viewport.zoom
+    } else if (overRotateHandle) {
+      overRotateHandle = false
     }
   }
 
@@ -496,6 +545,9 @@
   // ---- Keyboard ------------------------------------------------------------
 
   function applyHistoryEntry(entry: HistoryEntry, isUndo: boolean): void {
+    // Undo rewrites the float's pixels and placement directly, so the move
+    // tool's cached float state is stale from here on.
+    invalidateFloatingSelection()
     // Restore selection if present
     if (entry.selectionBefore !== undefined) {
       selection.set(isUndo ? entry.selectionBefore! : entry.selectionAfter!)
@@ -590,7 +642,7 @@
   $: cursor = isPanning ? 'grabbing'
     : spaceDown ? 'grab'
     : isSelectTool ? 'crosshair'
-    : $activeToolName === 'move' ? 'move'
+    : $activeToolName === 'move' ? (overRotateHandle ? 'grab' : 'move')
     : $activeToolName === 'move-layer' ? 'grab'
     : 'none'
 
