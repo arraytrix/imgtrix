@@ -500,25 +500,41 @@
     if (entry.selectionBefore !== undefined) {
       selection.set(isUndo ? entry.selectionBefore! : entry.selectionAfter!)
     }
-    // Restore layer offset if present (move-tool entries)
-    if (entry.offsetBefore !== undefined && entry.offsetAfter !== undefined) {
-      const layer = $layerStack.layers.find(l => l.id === entry.layerId)
-      if (layer) {
-        const off = isUndo ? entry.offsetBefore! : entry.offsetAfter!
-        layer.offsetX = off.x
-        layer.offsetY = off.y
-      }
-    }
-    // Restore pixels if present
-    if (entry.beforePixels.byteLength > 0) {
-      const pixels = isUndo ? entry.beforePixels : entry.afterPixels
-      const layer = $layerStack.layers.find(l => l.id === entry.layerId)
-      if (!layer) return
-      const { x, y, w, h } = entry.dirtyRect
-      layer.putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), x, y)
+    applyLayerPatch(entry.layerId, entry.dirtyRect, entry.beforePixels, entry.afterPixels,
+                    entry.offsetBefore, entry.offsetAfter, isUndo)
+    if (entry.extra) {
+      const x = entry.extra
+      applyLayerPatch(x.layerId, x.dirtyRect, x.beforePixels, x.afterPixels,
+                      x.offsetBefore, x.offsetAfter, isUndo)
     }
     requestRender()
     bump()
+  }
+
+  function applyLayerPatch(
+    layerId: string,
+    dirtyRect: { x: number; y: number; w: number; h: number } | undefined,
+    beforePixels: ArrayBuffer | undefined,
+    afterPixels: ArrayBuffer | undefined,
+    offsetBefore: { x: number; y: number } | undefined,
+    offsetAfter: { x: number; y: number } | undefined,
+    isUndo: boolean
+  ): void {
+    const layer = $layerStack.layers.find(l => l.id === layerId)
+    if (!layer) return
+    // Restore layer offset if present (move-tool entries)
+    if (offsetBefore !== undefined && offsetAfter !== undefined) {
+      const off = isUndo ? offsetBefore : offsetAfter
+      layer.offsetX = off.x
+      layer.offsetY = off.y
+    }
+    // Restore pixels if present
+    if (dirtyRect && beforePixels && beforePixels.byteLength > 0) {
+      const pixels = isUndo ? beforePixels : afterPixels
+      if (!pixels) return
+      const { x, y, w, h } = dirtyRect
+      layer.putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), x, y)
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent): void {

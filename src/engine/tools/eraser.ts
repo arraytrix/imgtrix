@@ -25,6 +25,7 @@ export class EraserTool implements Tool {
   }
 
   private beforeSnapshot: ImageData | null = null
+  private scratchCanvas: OffscreenCanvas | null = null
   private dirtyRect = { x: 0, y: 0, w: 0, h: 0 }
   private hasDirty = false
   private lastX: number | null = null
@@ -77,12 +78,51 @@ export class EraserTool implements Tool {
   private drawDab(x: number, y: number, context: ToolContext): void {
     // Eraser draws onto the active layer directly with destination-out.
     // Convert from doc coords to layer-local coords by subtracting the layer offset.
-    const lx = x - context.activeLayer.offsetX
-    const ly = y - context.activeLayer.offsetY
-    drawBrushDab(context.activeLayer.ctx, lx, ly, this.params, [0, 0, 0, 255], 'destination-out')
+    const ox = context.activeLayer.offsetX
+    const oy = context.activeLayer.offsetY
+    const mask = context.selectionMask
+
+    if (!mask) {
+      drawBrushDab(context.activeLayer.ctx, x - ox, y - oy, this.params, [0, 0, 0, 255], 'destination-out')
+    } else {
+      // Erasing is destructive, so the dab has to be trimmed *before* it
+      // touches the layer: stage it on a scratch canvas, clip it, then punch
+      // the result out in one composite.
+      const r  = dabRadius(this.params)
+      const bx = Math.floor(x - r) - 1
+      const by = Math.floor(y - r) - 1
+      const d  = Math.ceil(r * 2) + 3
+      const scratch    = this.scratch(d)
+      const scratchCtx = scratch.getContext('2d')!
+
+      scratchCtx.setTransform(1, 0, 0, 1, 0, 0)
+      scratchCtx.clearRect(0, 0, scratch.width, scratch.height)
+      // Work in document space so the mask's coordinates line up.
+      scratchCtx.setTransform(1, 0, 0, 1, -bx, -by)
+      drawBrushDab(scratchCtx, x, y, this.params, [0, 0, 0, 255])
+      mask.clip(scratchCtx, bx, by, d, d)
+      scratchCtx.setTransform(1, 0, 0, 1, 0, 0)
+
+      // Anything the scratch canvas didn't cover is transparent, so the
+      // destination-out composite leaves it alone.
+      const activeCtx = context.activeLayer.ctx
+      activeCtx.save()
+      activeCtx.globalCompositeOperation = 'destination-out'
+      activeCtx.drawImage(scratch, bx - ox, by - oy)
+      activeCtx.restore()
+    }
+
     context.activeLayer.markDirty()
     this.expandDirty(x, y, dabRadius(this.params), context)
     context.requestRender()
+  }
+
+  /** Reusable scratch canvas for clipped dabs; regrown when the brush grows. */
+  private scratch(size: number): OffscreenCanvas {
+    if (!this.scratchCanvas || this.scratchCanvas.width < size) {
+      this.scratchCanvas = new OffscreenCanvas(size, size)
+    }
+    return this.scratchCanvas
   }
 
   private expandDirty(x: number, y: number, r: number, ctx: ToolContext): void {

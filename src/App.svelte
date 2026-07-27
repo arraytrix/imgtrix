@@ -462,7 +462,16 @@
   let dbHardness = Math.round(dodgeBurnTool.hardness * 100)
   let dbStrength = dodgeBurnTool.strength
 
-  $: window.api.notifySelectionChanged(!!$selection)
+  // Only ping the main process when the answer actually changes — it rebuilds
+  // the native menu, and a move drag replaces the selection object every frame.
+  let hadSelection: boolean | null = null
+  $: {
+    const has = !!$selection
+    if (has !== hadSelection) {
+      hadSelection = has
+      window.api.notifySelectionChanged(has)
+    }
+  }
   $: window.api.notifyClipboardChanged(!!$clipboard)
 
   $: isPaintbrush      = $activeToolName === 'paintbrush'
@@ -677,23 +686,8 @@
   function onMoveSelectionPos(axis: 'x' | 'y', e: Event): void {
     const delta = Math.round(Number((e.target as HTMLInputElement).value))
     if (!delta) return
-    const sel = get(selection)
-    if (!sel || (sel.type !== 'rect' && sel.type !== 'mask')) return
-    const cw = $canvasSize.width, ch = $canvasSize.height
-    const dx = axis === 'x' ? delta : 0
-    const dy = axis === 'y' ? delta : 0
-    const layer = get(layerStack).active
-    const offsetBefore = { x: layer.offsetX, y: layer.offsetY }
-    layer.offsetX = Math.max(-2 * cw, Math.min(2 * cw, layer.offsetX + dx))
-    layer.offsetY = Math.max(-2 * ch, Math.min(2 * ch, layer.offsetY + dy))
-    selection.set({ ...sel, x: sel.x + dx, y: sel.y + dy })
-    get(historyManager).push({
-      description: 'Move', layerId: layer.id,
-      dirtyRect: { x: 0, y: 0, w: cw, h: ch },
-      beforePixels: new ArrayBuffer(0), afterPixels: new ArrayBuffer(0),
-      selectionBefore: sel, selectionAfter: get(selection),
-      offsetBefore, offsetAfter: { x: layer.offsetX, y: layer.offsetY },
-    })
+    const entry = moveTool.nudge(axis === 'x' ? delta : 0, axis === 'y' ? delta : 0)
+    if (entry) get(historyManager).push(entry)
     moveSelDX = 0; moveSelDY = 0
     bump()
     menuAction.set('render')
@@ -1148,7 +1142,7 @@
 
     {#if isMove}
 
-      {#if $selection && ($selection.type === 'rect' || $selection.type === 'mask')}
+      {#if $selection}
         <div class="tool-group">
           <span class="label">X</span>
           <input type="number" class="param-num param-num--wide"
@@ -1162,7 +1156,7 @@
             on:change={e => onMoveSelectionPos('y', e)} />
         </div>
       {:else}
-        <span class="sel-hint">{$selection ? HINTS.moveSelection : HINTS.makeSelectionFirst}</span>
+        <span class="sel-hint">{HINTS.makeSelectionFirst}</span>
       {/if}
 
     {:else if isMoveLayer}

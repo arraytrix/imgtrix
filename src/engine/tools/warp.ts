@@ -21,6 +21,8 @@ export class WarpTool implements Tool {
   private dispX: Float32Array | null = null
   private dispY: Float32Array | null = null
   private beforePixels: ArrayBuffer | null = null
+  /** View over beforePixels — the source for restoring pixels outside a selection. */
+  private origPixels: Uint8ClampedArray | null = null
   private hasDirty = false
 
   // Bounding box of pixels whose displacement has been touched this stroke
@@ -36,6 +38,7 @@ export class WarpTool implements Tool {
     this.W = context.activeLayer.canvas.width
     this.H = context.activeLayer.canvas.height
     this.beforePixels = context.activeLayer.getImageData().data.buffer.slice(0)
+    this.origPixels   = new Uint8ClampedArray(this.beforePixels)
     this.dispX = new Float32Array(this.W * this.H)
     this.dispY = new Float32Array(this.W * this.H)
     this.hasDirty = false
@@ -181,6 +184,7 @@ export class WarpTool implements Tool {
       this.warpGL.updateDisp(this.dispX, this.dispY, rx0, ry0, rx1, ry1)
       const pixels = this.warpGL.render(rx0, ry0, rw, rh)
       if (pixels) {
+        this.restoreOutsideSelection(pixels, rx0, ry0, rw, rh, context)
         context.activeLayer.putImageData(new ImageData(pixels, rw, rh), rx0, ry0)
         return
       }
@@ -223,7 +227,37 @@ export class WarpTool implements Tool {
       }
     }
 
+    this.restoreOutsideSelection(out, rx0, ry0, rw, rh, context)
     context.activeLayer.putImageData(new ImageData(out, rw, rh), rx0, ry0)
+  }
+
+  /**
+   * Warp resamples whole rects, so honoring a selection means putting the
+   * pre-stroke pixels back everywhere outside it before the rect is written.
+   * Coordinates in / out are layer-local.
+   */
+  private restoreOutsideSelection(
+    out: Uint8ClampedArray,
+    rx0: number, ry0: number, rw: number, rh: number,
+    context: ToolContext
+  ): void {
+    const mask = context.selectionMask
+    const orig = this.origPixels
+    if (!mask || !orig) return
+
+    const ox = context.activeLayer.offsetX, oy = context.activeLayer.offsetY
+    const W  = this.W
+    for (let row = 0; row < rh; row++) {
+      for (let col = 0; col < rw; col++) {
+        if (mask.contains(rx0 + col + ox, ry0 + row + oy)) continue
+        const di = (row * rw + col) * 4
+        const si = ((ry0 + row) * W + (rx0 + col)) * 4
+        out[di]     = orig[si]
+        out[di + 1] = orig[si + 1]
+        out[di + 2] = orig[si + 2]
+        out[di + 3] = orig[si + 3]
+      }
+    }
   }
 
   private falloff(dist: number, r: number): number {
@@ -235,6 +269,7 @@ export class WarpTool implements Tool {
 
   private reset(): void {
     this.beforePixels = null
+    this.origPixels   = null
     this.snapshotData = null
     this.dispX        = null
     this.dispY        = null

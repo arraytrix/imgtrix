@@ -1,5 +1,6 @@
 import type { Tool, ToolEvent, ToolContext } from './tool'
 import type { HistoryEntry } from '../history-manager'
+import type { SelectionMask } from '../selection-mask'
 import { extractRect } from '../history-manager'
 
 export class FillTool implements Tool {
@@ -16,9 +17,13 @@ export class FillTool implements Tool {
 
     if (lx < 0 || lx >= layer.canvas.width || ly < 0 || ly >= layer.canvas.height) return
 
+    // Clicking outside an active selection fills nothing.
+    const mask = context.selectionMask
+    if (mask && !mask.contains(event.x, event.y)) return
+
     this.beforeSnapshot = layer.getImageData()
     const imageData = layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height)
-    this.floodFill(imageData, lx, ly)
+    this.floodFill(imageData, lx, ly, mask, layer.offsetX, layer.offsetY)
     layer.ctx.putImageData(imageData, 0, 0)
     layer.markDirty()
     context.requestRender()
@@ -51,7 +56,10 @@ export class FillTool implements Tool {
 
   getCursor(): string { return 'crosshair' }
 
-  private floodFill(imageData: ImageData, sx: number, sy: number): void {
+  private floodFill(
+    imageData: ImageData, sx: number, sy: number,
+    mask: SelectionMask | null, offsetX: number, offsetY: number
+  ): void {
     const { data, width, height } = imageData
     const startIdx = (sy * width + sx) * 4
     const tR = data[startIdx]
@@ -64,11 +72,20 @@ export class FillTool implements Tool {
     if (tR === fr && tG === fg && tB === fb && tA === fa) return
 
     const tol = this.tolerance
-    const matches = (i: number): boolean =>
-      Math.abs(data[i]     - tR) <= tol &&
-      Math.abs(data[i + 1] - tG) <= tol &&
-      Math.abs(data[i + 2] - tB) <= tol &&
-      Math.abs(data[i + 3] - tA) <= tol
+    // Takes a pixel position (not a byte index) so the selection test can
+    // recover the coordinates. Pixels outside the selection never match, which
+    // stops the flood at the selection edge.
+    const matches = (pos: number): boolean => {
+      if (mask) {
+        const px = pos % width
+        if (!mask.contains(px + offsetX, (pos - px) / width + offsetY)) return false
+      }
+      const i = pos * 4
+      return Math.abs(data[i]     - tR) <= tol &&
+             Math.abs(data[i + 1] - tG) <= tol &&
+             Math.abs(data[i + 2] - tB) <= tol &&
+             Math.abs(data[i + 3] - tA) <= tol
+    }
 
     const visited = new Uint8Array(width * height)
     const stack: number[] = [sy * width + sx]
@@ -81,12 +98,12 @@ export class FillTool implements Tool {
       let x = pos % width
 
       // Extend left to start of matching span
-      while (x > 0 && !visited[y * width + x - 1] && matches((y * width + x - 1) * 4)) x--
+      while (x > 0 && !visited[y * width + x - 1] && matches(y * width + x - 1)) x--
 
       let spanAbove = false
       let spanBelow = false
 
-      while (x < width && !visited[y * width + x] && matches((y * width + x) * 4)) {
+      while (x < width && !visited[y * width + x] && matches(y * width + x)) {
         const pixelPos = y * width + x
         visited[pixelPos] = 1
         const i = pixelPos * 4
@@ -97,20 +114,20 @@ export class FillTool implements Tool {
 
         if (y > 0) {
           const above = (y - 1) * width + x
-          if (!spanAbove && !visited[above] && matches(above * 4)) {
+          if (!spanAbove && !visited[above] && matches(above)) {
             stack.push(above)
             spanAbove = true
-          } else if (spanAbove && (visited[above] || !matches(above * 4))) {
+          } else if (spanAbove && (visited[above] || !matches(above))) {
             spanAbove = false
           }
         }
 
         if (y < height - 1) {
           const below = (y + 1) * width + x
-          if (!spanBelow && !visited[below] && matches(below * 4)) {
+          if (!spanBelow && !visited[below] && matches(below)) {
             stack.push(below)
             spanBelow = true
-          } else if (spanBelow && (visited[below] || !matches(below * 4))) {
+          } else if (spanBelow && (visited[below] || !matches(below))) {
             spanBelow = false
           }
         }

@@ -1,6 +1,10 @@
+import { get } from 'svelte/store'
 import type { Tool } from './tools/tool'
 import type { LayerStack } from './layer-stack'
 import type { HistoryManager, HistoryEntry } from './history-manager'
+import type { Selection } from './selection'
+import { SelectionMask } from './selection-mask'
+import { selection } from '../store'
 import { PencilTool } from './tools/pencil'
 
 export class ToolManager {
@@ -8,6 +12,14 @@ export class ToolManager {
   strokeCanvas: OffscreenCanvas
   strokeCtx: OffscreenCanvasRenderingContext2D
   private isDrawing = false
+
+  // Rasterizing a selection isn't free, so the mask is cached and reused until
+  // the selection object itself changes. Selections are always replaced (never
+  // mutated in place), so identity is a sound cache key.
+  private maskCache: SelectionMask | null = null
+  private maskSel: Selection | null = null
+  private maskW = 0
+  private maskH = 0
 
   constructor(width: number, height: number) {
     this.strokeCanvas = new OffscreenCanvas(width, height)
@@ -92,13 +104,30 @@ export class ToolManager {
   }
 
   private makeContext(layerStack: LayerStack, requestRender: () => void) {
+    const self = this
     return {
       activeLayer: layerStack.active,
       strokeCanvas: this.strokeCanvas,
       strokeCtx: this.strokeCtx,
       canvasWidth: layerStack.width,
       canvasHeight: layerStack.height,
+      // Getter so tools that don't clip (selection, move, eyedropper) never
+      // trigger the rasterization.
+      get selectionMask(): SelectionMask | null {
+        return self.selectionMaskFor(layerStack.width, layerStack.height)
+      },
       requestRender
     }
+  }
+
+  private selectionMaskFor(width: number, height: number): SelectionMask | null {
+    const sel = get(selection)
+    if (sel !== this.maskSel || width !== this.maskW || height !== this.maskH) {
+      this.maskSel   = sel
+      this.maskW     = width
+      this.maskH     = height
+      this.maskCache = SelectionMask.from(sel, width, height)
+    }
+    return this.maskCache
   }
 }

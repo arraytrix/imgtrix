@@ -93,7 +93,11 @@ export class PencilTool implements Tool {
 
   private drawDab(x: number, y: number, context: ToolContext): void {
     drawBrushDab(context.strokeCtx, x, y, this.params, this.color)
-    this.expandDirty(x, y, dabRadius(this.params), context)
+    const r = dabRadius(this.params)
+    // Trim the dab to the selection immediately so the live overlay shows the
+    // same thing that gets committed on pointer up.
+    context.selectionMask?.clip(context.strokeCtx, x - r - 1, y - r - 1, r * 2 + 2, r * 2 + 2)
+    this.expandDirty(x, y, r, context)
     context.requestRender()
   }
 

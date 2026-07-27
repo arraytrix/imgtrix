@@ -94,6 +94,7 @@ export class BlendTool implements Tool {
     const rw = rx1 - rx0, rh = ry1 - ry0
     const imgData = context.activeLayer.ctx.getImageData(rx0, ry0, rw, rh)
     const pix = imgData.data
+    const mask = context.selectionMask
 
     const rSq      = r * r
     const innerR   = this.hardness * r
@@ -113,6 +114,11 @@ export class BlendTool implements Tool {
           const dist = Math.sqrt(distSq)
           fo = falloffRange > 0 ? 1 - (dist - innerR) / falloffRange : 1
         }
+
+        // Layer-local position of this pixel
+        const cpx = rx0 + col
+        const cpy = ry0 + row
+        if (mask && !mask.contains(cpx + ox, cpy + oy)) continue
 
         // Smudge buffer index (may be partially OOB if buffer partially outside canvas)
         const bCol = cpx - bx0

@@ -9,6 +9,19 @@ export interface HistoryEntry {
   selectionAfter?:  import('./selection').Selection | null
   offsetBefore?: { x: number; y: number }
   offsetAfter?:  { x: number; y: number }
+  /**
+   * A second layer changed by the same operation, undone/redone together with
+   * it — used by Move Selection, which punches a hole in the source layer and
+   * fills a float layer in one step.
+   */
+  extra?: {
+    layerId: string
+    dirtyRect?: { x: number; y: number; w: number; h: number }
+    beforePixels?: ArrayBuffer
+    afterPixels?:  ArrayBuffer
+    offsetBefore?: { x: number; y: number }
+    offsetAfter?:  { x: number; y: number }
+  }
 }
 
 /**

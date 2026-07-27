@@ -99,6 +99,7 @@ export class DodgeBurnTool implements Tool {
     const rw = rx1 - rx0, rh = ry1 - ry0
     const imgData = context.activeLayer.ctx.getImageData(rx0, ry0, rw, rh)
     const pix = imgData.data
+    const mask = context.selectionMask
 
     const rSq      = r * r
     const innerR   = this.hardness * r
@@ -118,6 +119,8 @@ export class DodgeBurnTool implements Tool {
           const dist = Math.sqrt(distSq)
           fo = falloffRange > 0 ? 1 - (dist - innerR) / falloffRange : 1
         }
+
+        if (mask && !mask.contains(rx0 + col + ox, ry0 + row + oy)) continue
 
         const pi = (row * rw + col) * 4
         if (pix[pi + 3] === 0) continue   // skip fully transparent pixels

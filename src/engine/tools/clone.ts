@@ -176,6 +176,10 @@ export class CloneTool implements Tool {
     strokeCtx.restore()
 
     const effectiveR = r + this.softness * r * 0.5
+    // Trim to the selection while the stroke is still staged on strokeCanvas.
+    context.selectionMask?.clip(
+      strokeCtx, x - effectiveR - 1, y - effectiveR - 1, effectiveR * 2 + 2, effectiveR * 2 + 2
+    )
     this.expandDirty(x, y, effectiveR, context)
     context.requestRender()
   }

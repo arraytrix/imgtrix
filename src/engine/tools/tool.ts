@@ -1,5 +1,6 @@
 import type { Layer } from '../layer'
 import type { HistoryEntry } from '../history-manager'
+import type { SelectionMask } from '../selection-mask'
 export type { HistoryEntry }
 
 export interface ToolEvent {
@@ -16,6 +17,12 @@ export interface ToolContext {
   strokeCtx: OffscreenCanvasRenderingContext2D
   canvasWidth: number
   canvasHeight: number
+  /**
+   * The active selection rasterized to document space, or null when nothing is
+   * selected. Every tool that writes pixels must leave everything outside it
+   * untouched. Built lazily and cached per stroke by the ToolManager.
+   */
+  readonly selectionMask: SelectionMask | null
   requestRender(): void
 }
 
