@@ -1,13 +1,14 @@
 import { app, ipcMain } from 'electron'
 import { join } from 'path'
 import { readFile, writeFile } from 'fs/promises'
-import { DEFAULT_SETTINGS, type AppSettings } from '../src/constants/settings_defaults'
+import { DEFAULT_SETTINGS, clampHistoryBudgetMB, type AppSettings } from '../src/constants/settings_defaults'
 
 const SETTINGS_PATH = join(app.getPath('userData'), 'settings.json')
 
 function mergeWithDefaults(partial: Partial<AppSettings>): AppSettings {
   return {
     hotkeys: { ...DEFAULT_SETTINGS.hotkeys, ...partial.hotkeys },
+    historyBudgetMB: clampHistoryBudgetMB(partial.historyBudgetMB ?? DEFAULT_SETTINGS.historyBudgetMB),
   }
 }
 
@@ -30,7 +31,7 @@ export function registerSettingsIpc(): void {
   })
 
   ipcMain.handle('settings:save', async (_e, settings: AppSettings) => {
-    await saveSettings(settings)
+    await saveSettings(mergeWithDefaults(settings))
   })
 
   ipcMain.handle('settings:reset', async () => {

@@ -21,9 +21,26 @@ export interface HotkeySettings {
 
 export interface AppSettings {
   hotkeys: HotkeySettings
+  /** Memory each tab's undo history may hold, in MB. */
+  historyBudgetMB: number
+}
+
+// Undo snapshots are raw RGBA, so this is real resident memory — and it is per
+// tab, not for the app as a whole. The ceiling is deliberately generous;
+// machines with a lot of RAM can keep a much deeper history than the default.
+export const HISTORY_BUDGET_MIN_MB = 64
+export const HISTORY_BUDGET_MAX_MB = 65536
+export const HISTORY_BUDGET_DEFAULT_MB = 512
+
+/** Coerce anything read off disk into a usable budget. */
+export function clampHistoryBudgetMB(value: unknown): number {
+  const mb = Math.round(Number(value))
+  if (!Number.isFinite(mb)) return HISTORY_BUDGET_DEFAULT_MB
+  return Math.max(HISTORY_BUDGET_MIN_MB, Math.min(HISTORY_BUDGET_MAX_MB, mb))
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
+  historyBudgetMB: HISTORY_BUDGET_DEFAULT_MB,
   hotkeys: {
     paintbrush:     TOOL_KEYS.paintbrush,
     eraser:         TOOL_KEYS.eraser,

@@ -1,7 +1,7 @@
 import type { Tool, ToolEvent, ToolContext } from './tool'
 import type { HistoryEntry } from '../history-manager'
 import { extractRect } from '../history-manager'
-import { drawBrushDab, dabRadius, strokeOpacity, DEFAULT_BRUSH, type BrushParams } from './brush-params'
+import { drawBrushDab, dabRadius, strokeOpacity, toLayerRect, DEFAULT_BRUSH, type BrushParams } from './brush-params'
 
 export class PencilTool implements Tool {
   color: [number, number, number, number] = [0, 0, 0, 255]
@@ -68,11 +68,14 @@ export class PencilTool implements Tool {
     context.strokeCtx.clearRect(0, 0, context.strokeCanvas.width, context.strokeCanvas.height)
     context.requestRender()
 
-    const dr = this.dirtyRect
+    // dirtyRect is document-space; history addresses the layer's own buffer.
+    const dr = toLayerRect(context.activeLayer, this.dirtyRect)
+    if (!dr) { this.reset(); return null }
+
     const entry: HistoryEntry = {
       description: 'Paintbrush stroke',
       layerId: context.activeLayer.id,
-      dirtyRect: { ...dr },
+      dirtyRect: dr,
       beforePixels: extractRect(this.beforeSnapshot, dr.x, dr.y, dr.w, dr.h),
       afterPixels:  context.activeLayer.ctx.getImageData(dr.x, dr.y, dr.w, dr.h).data.buffer.slice(0),
     }

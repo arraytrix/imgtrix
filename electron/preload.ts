@@ -5,10 +5,10 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('file:open-dialog'),
   importDialog: (): Promise<string | null> =>
     ipcRenderer.invoke('file:import-dialog'),
-  saveDialog: (defaultName: string): Promise<string | null> =>
-    ipcRenderer.invoke('file:save-dialog', defaultName),
-  exportDialog: (defaultName: string): Promise<string | null> =>
-    ipcRenderer.invoke('file:export-dialog', defaultName),
+  saveDialog: (defaultName: string, sourcePath?: string | null): Promise<string | null> =>
+    ipcRenderer.invoke('file:save-dialog', defaultName, sourcePath ?? null),
+  exportDialog: (defaultName: string, sourcePath?: string | null): Promise<string | null> =>
+    ipcRenderer.invoke('file:export-dialog', defaultName, sourcePath ?? null),
   readFile: (path: string): Promise<ArrayBuffer> =>
     ipcRenderer.invoke('file:read', path),
   writeFile: (path: string, data: ArrayBuffer): Promise<void> =>
@@ -50,8 +50,8 @@ declare global {
     api: {
       openDialog(): Promise<string | null>
       importDialog(): Promise<string | null>
-      saveDialog(defaultName: string): Promise<string | null>
-      exportDialog(defaultName: string): Promise<string | null>
+      saveDialog(defaultName: string, sourcePath?: string | null): Promise<string | null>
+      exportDialog(defaultName: string, sourcePath?: string | null): Promise<string | null>
       readFile(path: string): Promise<ArrayBuffer>
       writeFile(path: string, data: ArrayBuffer): Promise<void>
       onMenuAction(callback: (action: string) => void): void

@@ -18,6 +18,14 @@ export interface Tab {
   id: string
   title: string
   filePath: string | null
+  /**
+   * Where this tab's content came from on disk, and where its Save/Export
+   * dialogs should open. Set when an image or project is opened, and updated
+   * whenever the user saves or exports somewhere else. Unlike `filePath` this
+   * is set for imported images too — they have a home directory but no project
+   * file to save back to.
+   */
+  sourcePath: string | null
   layerStack: LayerStack
   historyManager: HistoryManager
   selection: Selection | null
@@ -41,6 +49,7 @@ function makeTab(width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT): Tab {
     id: crypto.randomUUID(),
     title: 'Untitled',
     filePath: null,
+    sourcePath: null,
     layerStack: new LayerStack(width, height),
     historyManager: new HistoryManager(),
     selection: null,
@@ -146,12 +155,16 @@ export function newTab(width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT): void {
   bump()
 }
 
-export function openInNewTab(ls: LayerStack, hm: HistoryManager, title: string, filePath: string | null): void {
+export function openInNewTab(
+  ls: LayerStack, hm: HistoryManager, title: string,
+  filePath: string | null, sourcePath: string | null = filePath
+): void {
   const tab = makeTab()
   tab.layerStack = ls
   tab.historyManager = hm
   tab.title = title
   tab.filePath = filePath
+  tab.sourcePath = sourcePath
   wireDirtyCallback(tab)  // re-wire since we replaced historyManager
   saveCurrentTabState()
   tabs.update($tabs => [...$tabs, tab])
@@ -180,6 +193,15 @@ export function updateTabMeta(idx: number, title: string, filePath: string | nul
   tabs.update(ts => {
     ts[idx].title = title
     ts[idx].filePath = filePath
+    if (filePath) ts[idx].sourcePath = filePath
+    return [...ts]
+  })
+}
+
+/** Remember where this tab was last written, so its next dialog opens there. */
+export function setTabSourcePath(idx: number, path: string): void {
+  tabs.update(ts => {
+    ts[idx].sourcePath = path
     return [...ts]
   })
 }

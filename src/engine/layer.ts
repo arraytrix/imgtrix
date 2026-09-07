@@ -54,6 +54,20 @@ export class Layer {
     this.gpuDirty = true
   }
 
+  /**
+   * Swap in a whole new buffer at a possibly different size — used to put a
+   * layer back the way it was after undoing a crop.
+   */
+  restoreBuffer(width: number, height: number, pixels: ArrayBuffer): void {
+    const newCanvas = new OffscreenCanvas(width, height)
+    const newCtx = newCanvas.getContext('2d')!
+    newCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0)
+    this.canvas = newCanvas
+    this.ctx = newCtx
+    this.gpuDirty = true
+    this.modified = true
+  }
+
   rotate(degrees: 90 | 180 | 270): void {
     const W = this.canvas.width
     const H = this.canvas.height

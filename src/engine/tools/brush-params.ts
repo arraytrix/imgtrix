@@ -86,10 +86,40 @@ export function drawBrushDab(
   ctx.restore()
 }
 
-/** Conservative radius for dirty-rect expansion (accounts for softness blur). */
+/**
+ * Convert a document-space rect to layer-local pixels, clamped to the layer.
+ *
+ * Tools track their dirty area in document space (that's the space pointer
+ * events and the stroke canvas use), but history entries address the layer's
+ * own pixel buffer. The two only coincide when the layer's offset is zero,
+ * which stopped being the common case once pasted and imported layers started
+ * carrying offsets. Returns null when nothing of the rect lands on the layer.
+ */
+export function toLayerRect(
+  layer: { offsetX: number; offsetY: number; canvas: { width: number; height: number } },
+  doc: { x: number; y: number; w: number; h: number }
+): { x: number; y: number; w: number; h: number } | null {
+  const x0 = Math.max(0, Math.floor(doc.x - layer.offsetX))
+  const y0 = Math.max(0, Math.floor(doc.y - layer.offsetY))
+  const x1 = Math.min(layer.canvas.width,  Math.ceil(doc.x + doc.w - layer.offsetX))
+  const y1 = Math.min(layer.canvas.height, Math.ceil(doc.y + doc.h - layer.offsetY))
+  if (x1 <= x0 || y1 <= y0) return null
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+}
+
+/**
+ * Conservative radius for dirty-rect expansion (accounts for softness blur).
+ *
+ * `blur(Npx)` is a Gaussian with stdDeviation N, so the dab keeps contributing
+ * out to roughly 3N past the disc — allowing only one sigma clipped the tail.
+ * The eraser applies its mask patch-by-patch within this radius, so an
+ * under-estimate leaves the spill subtracted inside some patches and not
+ * others, i.e. rectangular seams along a soft stroke.
+ */
 export function dabRadius(params: BrushParams): number {
-  const r = params.size / 2
-  return r + params.softness * r * 0.5
+  const r      = params.size / 2
+  const blurPx = params.softness * r * 0.5
+  return r + blurPx * 3
 }
 
 /** Opacity to apply when the compositor draws the strokeCanvas onto the display. */

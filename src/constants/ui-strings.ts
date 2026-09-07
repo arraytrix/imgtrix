@@ -42,6 +42,8 @@ export const MODAL = {
   whiteBalTitle:   'White Balance',
   resizeTitle:     'Resize Image',
   canvasSizeTitle: 'Canvas Size',
+  historyMemoryTitle: 'History Memory',
+  historyMemoryMsg:   'Undo steps are stored as raw pixels, so a deeper history costs real memory. This budget applies to each open tab on its own; once a tab fills it, its oldest steps are dropped to make room.',
   unsavedTitle:    'Unsaved Changes',
   newCanvasTitle:  'New Canvas',
 } as const

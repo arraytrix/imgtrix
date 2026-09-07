@@ -302,6 +302,24 @@ export class WebGLCompositor {
     this.fboB = mkFBO()
   }
 
+  /**
+   * Pixel-store state for every canvas → texture upload.
+   *
+   * The fragment shader works in premultiplied alpha (it un-premultiplies src
+   * and dst before blending, and writes premultiplied), and the FBO textures it
+   * ping-pongs through are premultiplied because that is what it wrote. Canvas
+   * uploads have to match: with UNPACK_PREMULTIPLY_ALPHA_WEBGL off — the WebGL
+   * default — the browser hands over *un*-premultiplied RGBA, and the shader's
+   * `rgb / a` then divides by alpha a second time. Wherever a layer is partly
+   * transparent (the feathered rim of an eraser stroke, most visibly) the colour
+   * is composited at roughly 1/alpha its true weight, leaving a hard bright
+   * fringe over whatever sits underneath.
+   */
+  private unpackParams(gl: WebGL2RenderingContext): void {
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true)
+  }
+
   private texParams(gl: WebGL2RenderingContext): void {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
@@ -317,7 +335,7 @@ export class WebGLCompositor {
     // Delete stale cached texture before re-upload
     if (cached) gl.deleteTexture(cached)
 
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    this.unpackParams(gl)
     const tex = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, tex)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, layer.canvas)
@@ -329,7 +347,7 @@ export class WebGLCompositor {
 
   // Uploads an OffscreenCanvas without caching (used for the stroke canvas overlay).
   private uploadCanvas(gl: WebGL2RenderingContext, canvas: OffscreenCanvas): WebGLTexture {
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    this.unpackParams(gl)
     const tex = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, tex)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas)

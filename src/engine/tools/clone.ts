@@ -1,7 +1,7 @@
 import type { Tool, ToolEvent, ToolContext } from './tool'
 import type { HistoryEntry } from '../history-manager'
 import { extractRect } from '../history-manager'
-import { strokeOpacity } from './brush-params'
+import { strokeOpacity, toLayerRect } from './brush-params'
 
 export class CloneTool implements Tool {
   size      = 40
@@ -104,11 +104,14 @@ export class CloneTool implements Tool {
     context.strokeCtx.clearRect(0, 0, context.strokeCanvas.width, context.strokeCanvas.height)
     context.requestRender()
 
-    const dr = this.dirtyRect
+    // dirtyRect is document-space; history addresses the layer's own buffer.
+    const dr = toLayerRect(context.activeLayer, this.dirtyRect)
+    if (!dr) { this.reset(); return null }
+
     const entry: HistoryEntry = {
       description: 'Clone stroke',
       layerId: context.activeLayer.id,
-      dirtyRect: { ...dr },
+      dirtyRect: dr,
       beforePixels: extractRect(this.beforeSnapshot, dr.x, dr.y, dr.w, dr.h),
       afterPixels:  context.activeLayer.ctx.getImageData(dr.x, dr.y, dr.w, dr.h).data.buffer.slice(0),
     }

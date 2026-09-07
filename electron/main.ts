@@ -5,7 +5,7 @@ Sentry.init({
 })
 
 import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { readFile, writeFile } from 'fs/promises'
@@ -129,6 +129,7 @@ function buildMenu(): void {
       label: MENU.settings,
       submenu: [
         { label: MENU.hotkeys,         click: () => send('settings-hotkeys') },
+        { label: MENU.historyMemory,   click: () => send('settings-history') },
         { type: 'separator' },
         { label: MENU.restoreDefaults, click: () => send('settings-restore-defaults') }
       ]
@@ -242,17 +243,26 @@ ipcMain.handle('file:import-dialog', async () => {
   return result.canceled ? null : result.filePaths[0]
 })
 
-ipcMain.handle('file:save-dialog', async (_e, defaultName: string) => {
+/**
+ * Point the dialog at the folder the document came from. A bare filename makes
+ * the OS fall back to its default save location (Downloads), which is rarely
+ * where the user got the file from.
+ */
+function defaultSavePath(defaultName: string, sourcePath: string | null): string {
+  return sourcePath ? join(dirname(sourcePath), defaultName) : defaultName
+}
+
+ipcMain.handle('file:save-dialog', async (_e, defaultName: string, sourcePath: string | null = null) => {
   const result = await dialog.showSaveDialog({
-    defaultPath: defaultName,
+    defaultPath: defaultSavePath(defaultName, sourcePath),
     filters: [{ name: 'Image Editor Project', extensions: ['img'] }]
   })
   return result.canceled ? null : result.filePath
 })
 
-ipcMain.handle('file:export-dialog', async (_e, defaultName: string) => {
+ipcMain.handle('file:export-dialog', async (_e, defaultName: string, sourcePath: string | null = null) => {
   const result = await dialog.showSaveDialog({
-    defaultPath: defaultName,
+    defaultPath: defaultSavePath(defaultName, sourcePath),
     filters: [
       { name: 'PNG Image', extensions: ['png'] },
       { name: 'JPEG Image', extensions: ['jpg'] },

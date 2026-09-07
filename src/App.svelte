@@ -5,13 +5,16 @@
   import { get } from 'svelte/store'
   import { TOOL_KEYS } from './constants/hotkeys'
   import { toolTitle } from './constants/tool-meta'
-  import { settings, loadSettings, saveSettings, resetHotkeys, updateHotkeys } from './settings-store'
+  import { settings, loadSettings, saveSettings, resetHotkeys, updateHotkeys, updateHistoryBudget } from './settings-store'
   import type { HotkeySettings } from './constants/settings_defaults'
+  import { HISTORY_BUDGET_MIN_MB, HISTORY_BUDGET_MAX_MB } from './constants/settings_defaults'
   import { PARAM_LABELS as PL, PARAM_TOOLTIPS as PT } from './constants/param-strings'
   import { HINTS, MODAL, SAT_MODE_LABELS, DODGE_MODE_LABELS, WARP_MODE_LABELS, TAB_LABELS, ADJUST_LABELS } from './constants/ui-strings'
-  import { toolManager, layerStack, historyManager, bump, zoomPct, activeToolName, canvasSize, menuAction, selection, clipboard, tabs, activeTabIndex, switchTab, newTab, openInNewTab, closeTab, updateTabMeta, markCurrentTabClean, markCurrentTabDirty } from './store'
+  import { toolManager, layerStack, historyManager, bump, zoomPct, activeToolName, canvasSize, menuAction, selection, clipboard, tabs, activeTabIndex, switchTab, newTab, openInNewTab, closeTab, updateTabMeta, setTabSourcePath, markCurrentTabClean, markCurrentTabDirty } from './store'
   import { LayerStack } from './engine/layer-stack'
+  import type { Layer } from './engine/layer'
   import { HistoryManager, extractRect } from './engine/history-manager'
+  import type { HistoryEntry, LayerPatch } from './engine/history-manager'
   import { PencilTool } from './engine/tools/pencil'
   import { EraserTool } from './engine/tools/eraser'
   import { CloneTool } from './engine/tools/clone'
@@ -23,6 +26,7 @@
   import { LassoSelectTool } from './engine/tools/lasso-select'
   import { MagicWandTool } from './engine/tools/magic-wand'
   import { MoveTool } from './engine/tools/move'
+  import NumberInput from './components/NumberInput.svelte'
   import { MoveLayerTool } from './engine/tools/move-layer'
   import { EyedropperTool } from './engine/tools/eyedropper'
   import { FillTool } from './engine/tools/fill'
@@ -119,6 +123,46 @@
     menuAction.set('render')
   }
 
+  /**
+   * Run a whole-image adjustment over every layer, as one undoable step.
+   *
+   * `transform` mutates a layer's RGBA bytes in place. Adjustments touch the
+   * full layer, so each patch's dirty rect is the whole (layer-local) canvas.
+   */
+  function applyAdjustment(description: string, transform: (d: Uint8ClampedArray) => void): void {
+    const patches: LayerPatch[] = []
+    for (const layer of get(layerStack).layers) {
+      const w = layer.canvas.width
+      const h = layer.canvas.height
+      if (w === 0 || h === 0) continue
+      const imageData = layer.ctx.getImageData(0, 0, w, h)
+      const before = imageData.data.slice().buffer
+      transform(imageData.data)
+      layer.putImageData(imageData)
+      patches.push({
+        layerId: layer.id,
+        dirtyRect: { x: 0, y: 0, w, h },
+        beforePixels: before,
+        afterPixels: imageData.data.slice().buffer,
+      })
+    }
+    if (patches.length === 0) return
+
+    // HistoryEntry carries the first layer inline and the rest as extras; they
+    // undo and redo together.
+    const [main, ...extras] = patches
+    get(historyManager).push({
+      description,
+      layerId: main.layerId,
+      dirtyRect: main.dirtyRect!,
+      beforePixels: main.beforePixels!,
+      afterPixels: main.afterPixels!,
+      extras,
+    })
+    bump()
+    menuAction.set('render')
+  }
+
   // Contrast dialog
   let showContrastDialog = false
   let contrastValue = 0  // -100 to +100
@@ -129,24 +173,15 @@
   }
 
   function confirmContrast(): void {
-    const ls = get(layerStack)
     const factor = (259 * (contrastValue + 255)) / (255 * (259 - contrastValue))
-    for (const layer of ls.layers) {
-      const w = layer.canvas.width
-      const h = layer.canvas.height
-      const imageData = layer.ctx.getImageData(0, 0, w, h)
-      const d = imageData.data
+    applyAdjustment('Contrast', d => {
       for (let i = 0; i < d.length; i += 4) {
         d[i]     = Math.max(0, Math.min(255, factor * (d[i]     - 128) + 128))
         d[i + 1] = Math.max(0, Math.min(255, factor * (d[i + 1] - 128) + 128))
         d[i + 2] = Math.max(0, Math.min(255, factor * (d[i + 2] - 128) + 128))
       }
-      layer.ctx.putImageData(imageData, 0, 0)
-    }
+    })
     showContrastDialog = false
-    markCurrentTabDirty()
-    bump()
-    menuAction.set('render')
   }
 
   // Saturation adjustment dialog
@@ -159,25 +194,16 @@
   }
 
   function confirmSaturationAdjust(): void {
-    const ls = get(layerStack)
     const factor = 1 + satAdjustValue / 100
-    for (const layer of ls.layers) {
-      const w = layer.canvas.width
-      const h = layer.canvas.height
-      const imageData = layer.ctx.getImageData(0, 0, w, h)
-      const d = imageData.data
+    applyAdjustment('Saturation', d => {
       for (let i = 0; i < d.length; i += 4) {
         const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
         d[i]     = Math.max(0, Math.min(255, lum + factor * (d[i]     - lum)))
         d[i + 1] = Math.max(0, Math.min(255, lum + factor * (d[i + 1] - lum)))
         d[i + 2] = Math.max(0, Math.min(255, lum + factor * (d[i + 2] - lum)))
       }
-      layer.ctx.putImageData(imageData, 0, 0)
-    }
+    })
     showSaturationAdjustDialog = false
-    markCurrentTabDirty()
-    bump()
-    menuAction.set('render')
   }
 
   // Vibrancy adjustment dialog
@@ -190,13 +216,8 @@
   }
 
   function confirmVibrancy(): void {
-    const ls = get(layerStack)
     const strength = vibrancyValue / 100
-    for (const layer of ls.layers) {
-      const w = layer.canvas.width
-      const h = layer.canvas.height
-      const imageData = layer.ctx.getImageData(0, 0, w, h)
-      const d = imageData.data
+    applyAdjustment('Vibrancy', d => {
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i + 1], b = d[i + 2]
         const max = Math.max(r, g, b)
@@ -210,12 +231,8 @@
         d[i + 1] = Math.max(0, Math.min(255, lum + factor * (g - lum)))
         d[i + 2] = Math.max(0, Math.min(255, lum + factor * (b - lum)))
       }
-      layer.ctx.putImageData(imageData, 0, 0)
-    }
+    })
     showVibrancyDialog = false
-    markCurrentTabDirty()
-    bump()
-    menuAction.set('render')
   }
 
   // White balance dialog
@@ -230,14 +247,9 @@
   }
 
   function confirmWhiteBalance(): void {
-    const ls = get(layerStack)
     const temp = wbTemperature / 100  // -1 to +1
     const tint = wbTint / 100         // -1 to +1
-    for (const layer of ls.layers) {
-      const w = layer.canvas.width
-      const h = layer.canvas.height
-      const imageData = layer.ctx.getImageData(0, 0, w, h)
-      const d = imageData.data
+    applyAdjustment('White Balance', d => {
       for (let i = 0; i < d.length; i += 4) {
         // Temperature: warm = boost R, reduce B; cool = boost B, reduce R
         // Tint: magenta = boost R+B, reduce G; green = boost G, reduce R+B
@@ -245,12 +257,8 @@
         d[i + 1] = Math.max(0, Math.min(255, d[i + 1]             - tint * 40))
         d[i + 2] = Math.max(0, Math.min(255, d[i + 2] - temp * 40 + tint * 20))
       }
-      layer.ctx.putImageData(imageData, 0, 0)
-    }
+    })
     showWhiteBalanceDialog = false
-    markCurrentTabDirty()
-    bump()
-    menuAction.set('render')
   }
 
   // Merge down confirmation
@@ -259,21 +267,45 @@
   // Merge all confirmation
   let showMergeAllConfirm = false
 
+  /**
+   * Flatten layers bottom-to-top into a new canvas covering (x, y, w, h) in
+   * document space. Mirrors what the compositor does on screen, so a merge
+   * looks identical to what it replaced.
+   */
+  function flattenLayers(layers: Layer[], x: number, y: number, w: number, h: number): OffscreenCanvas {
+    const out = new OffscreenCanvas(Math.max(1, w), Math.max(1, h))
+    const ctx = out.getContext('2d')!
+    for (const layer of layers) {
+      ctx.save()
+      ctx.globalAlpha = layer.opacity ?? 1
+      ctx.globalCompositeOperation =
+        layer.blendMode === 'normal' ? 'source-over' : (layer.blendMode as GlobalCompositeOperation)
+      ctx.drawImage(layer.canvas, layer.offsetX - x, layer.offsetY - y)
+      ctx.restore()
+    }
+    return out
+  }
+
+  /** Replace a layer's pixels with an already-composited canvas. */
+  function adoptMerged(layer: Layer, merged: OffscreenCanvas, x: number, y: number): void {
+    layer.canvas  = merged
+    layer.ctx     = merged.getContext('2d')!
+    layer.offsetX = x
+    layer.offsetY = y
+    // Opacity and blend mode are baked into the pixels now — leaving them set
+    // would apply them a second time at composite.
+    layer.opacity   = 1
+    layer.blendMode = 'normal'
+    // Without this the WebGL compositor keeps serving the pre-merge texture.
+    layer.markDirty()
+  }
+
   function confirmMergeAll(): void {
     const ls = get(layerStack)
-    const merged = new OffscreenCanvas(ls.width, ls.height)
-    const ctx = merged.getContext('2d')!
-    for (const layer of ls.layers) {
-      if (!layer.visible) continue
-      ctx.globalAlpha = layer.opacity ?? 1
-      ctx.drawImage(layer.canvas, layer.offsetX, layer.offsetY)
-    }
-    ctx.globalAlpha = 1
+    const merged = flattenLayers(ls.layers.filter(l => l.visible), 0, 0, ls.width, ls.height)
     const bottom = ls.layers[0]
-    bottom.canvas = merged
-    bottom.ctx    = ctx
-    bottom.offsetX = 0
-    bottom.offsetY = 0
+    adoptMerged(bottom, merged, 0, 0)
+    bottom.visible = true
     ls.layers = [bottom]
     ls.activeIndex = 0
     get(historyManager).clear()
@@ -286,9 +318,26 @@
   function confirmMergeDown(): void {
     const ls = get(layerStack)
     const idx = ls.activeIndex
+    if (idx < 1) return
     const top    = ls.layers[idx]
     const bottom = ls.layers[idx - 1]
-    bottom.ctx.drawImage(top.canvas, top.offsetX - bottom.offsetX, top.offsetY - bottom.offsetY)
+
+    // Composite over the union of both layers. Merging into the lower layer's
+    // own canvas cropped the upper one whenever it was larger or offset
+    // differently — which is the normal case for pasted and imported layers.
+    const x0 = Math.min(bottom.offsetX, top.offsetX)
+    const y0 = Math.min(bottom.offsetY, top.offsetY)
+    const x1 = Math.max(bottom.offsetX + bottom.canvas.width,  top.offsetX + top.canvas.width)
+    const y1 = Math.max(bottom.offsetY + bottom.canvas.height, top.offsetY + top.canvas.height)
+
+    // The lower layer survives, so it's kept even if hidden; a hidden upper
+    // layer is discarded, matching what was on screen.
+    const stack = top.visible ? [bottom, top] : [bottom]
+    const wasVisible = bottom.visible
+    const merged = flattenLayers(stack, x0, y0, x1 - x0, y1 - y0)
+    adoptMerged(bottom, merged, x0, y0)
+    bottom.visible = wasVisible
+
     ls.layers.splice(idx, 1)
     ls.activeIndex = idx - 1
     get(historyManager).clear()
@@ -310,23 +359,14 @@
   }
 
   function confirmColorRGB(): void {
-    const ls = get(layerStack)
-    for (const layer of ls.layers) {
-      const w = layer.canvas.width
-      const h = layer.canvas.height
-      const imageData = layer.ctx.getImageData(0, 0, w, h)
-      const d = imageData.data
+    applyAdjustment('Color RGB', d => {
       for (let i = 0; i < d.length; i += 4) {
         d[i]     = Math.max(0, Math.min(255, d[i]     + colorR * 2.55))
         d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + colorG * 2.55))
         d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + colorB * 2.55))
       }
-      layer.ctx.putImageData(imageData, 0, 0)
-    }
+    })
     showColorRGBDialog = false
-    markCurrentTabDirty()
-    bump()
-    menuAction.set('render')
   }
 
   // Canvas size (resize) dialog
@@ -379,6 +419,31 @@
     updateHotkeys(pendingHotkeys)
     await saveSettings()
     showHotkeysDialog = false
+  }
+
+  // History memory dialog
+  let showHistoryDialog = false
+  let pendingHistoryMB = $settings.historyBudgetMB
+  let historyUsedMB = 0
+  let historySteps = 0
+
+  function openHistoryDialog(): void {
+    pendingHistoryMB = $settings.historyBudgetMB
+    const hm = get(historyManager)
+    historyUsedMB = hm.bytesUsed / (1024 * 1024)
+    historySteps = hm.stepCount
+    showHistoryDialog = true
+  }
+
+  $: historyBudgetValid = Number.isFinite(pendingHistoryMB)
+    && pendingHistoryMB >= HISTORY_BUDGET_MIN_MB
+    && pendingHistoryMB <= HISTORY_BUDGET_MAX_MB
+
+  async function confirmHistoryBudget(): Promise<void> {
+    if (!historyBudgetValid) return
+    updateHistoryBudget(Math.round(pendingHistoryMB))
+    await saveSettings()
+    showHistoryDialog = false
   }
 
   function openNewDialog(): void { showNewDialog = true }
@@ -651,6 +716,10 @@
   }
 
   let fillTolerance = fillTool.tolerance
+  function onFillTolerance(e: Event): void {
+    fillTolerance = +(e.target as HTMLInputElement).value
+    fillTool.tolerance = fillTolerance
+  }
 
   let edSampleSize = eyedropperTool.sampleSize
   $: edR = parseInt(colorHex.slice(1, 3), 16)
@@ -752,7 +821,7 @@
       const ls = await fileManager.importImageAsNew(path)
       const hm = new HistoryManager()
       const title = path.split(/[\\/]/).pop() ?? 'Untitled'
-      openInNewTab(ls, hm, title, null)
+      openInNewTab(ls, hm, title, null, path)
       if (closeBlankInitialTab) closeTab(0)
       await tick()
       menuAction.set('fit-view')
@@ -869,6 +938,7 @@
       if (action === 'adjust-white-balance') openWhiteBalanceDialog()
       if (action === 'adjust-color-rgb') openColorRGBDialog()
       if (action === 'settings-hotkeys') openHotkeysDialog()
+      if (action === 'settings-history') openHistoryDialog()
       if (action === 'settings-restore-defaults') await resetHotkeys()
       if (action === 'rotate-90-cw' || action === 'rotate-90-ccw' || action === 'rotate-180') {
         const deg = action === 'rotate-180' ? 180 : 90
@@ -896,7 +966,8 @@
   }
 
   async function saveAs(): Promise<void> {
-    const path = await window.api.saveDialog('untitled.img')
+    const sourcePath = get(tabs)[get(activeTabIndex)].sourcePath
+    const path = await window.api.saveDialog(suggestedName('img', 'untitled'), sourcePath)
     if (!path) return
     await fileManager.saveProject(get(layerStack), path)
     const title = path.split(/[\\/]/).pop() ?? 'Untitled'
@@ -1009,9 +1080,12 @@
     const imgData = ctx.getImageData(0, 0, cw, ch)
     if (sel.type === 'mask') {
       const pix = imgData.data
+      // The copied rect is clipped to the canvas, so it can be narrower than
+      // the mask — index by the mask's own stride, not the rect's.
+      const mx = cx0 - sel.x, my = cy0 - sel.y
       for (let i = 0; i < ch; i++) {
         for (let j = 0; j < cw; j++) {
-          if (!sel.data[i * cw + j]) pix[(i * cw + j) * 4 + 3] = 0
+          if (!sel.data[(i + my) * sel.w + (j + mx)]) pix[(i * cw + j) * 4 + 3] = 0
         }
       }
     }
@@ -1050,9 +1124,10 @@
       const lx0 = cx0 - lox, ly0 = cy0 - loy
       const imgData = layer.ctx.getImageData(lx0, ly0, cw, ch)
       const pix = imgData.data
+      const mx = cx0 - sel.x, my = cy0 - sel.y
       for (let i = 0; i < ch; i++) {
         for (let j = 0; j < cw; j++) {
-          if (sel.data[i * cw + j]) {
+          if (sel.data[(i + my) * sel.w + (j + mx)]) {
             const pi = (i * cw + j) * 4
             pix[pi] = pix[pi + 1] = pix[pi + 2] = pix[pi + 3] = 0
           }
@@ -1063,6 +1138,9 @@
       layer.ctx.clearRect(sel.x - lox, sel.y - loy, sel.w, sel.h)
     }
     layer.ctx.restore()
+    // All three branches paint through layer.ctx, so the GPU texture cache
+    // has to be invalidated by hand.
+    layer.markDirty()
 
     const dr = { x: cx0, y: cy0, w: cw, h: ch }
     get(historyManager).push({
@@ -1079,15 +1157,30 @@
     const clip = get(clipboard)
     if (!clip) return
     const ls = get(layerStack)
-    const newLayer = ls.add('Pasted')
-    const dr = { x: clip.x, y: clip.y, w: clip.imageData.width, h: clip.imageData.height }
-    newLayer.putImageData(clip.imageData, clip.x, clip.y)
+    const w = clip.imageData.width, h = clip.imageData.height
+
+    // Paste in place when the copied region still fits this document — that's
+    // what you want within a tab, or between same-sized images. Otherwise the
+    // source coordinates are meaningless here (they can even be off-canvas
+    // entirely), so centre it instead.
+    const fitsInPlace =
+      clip.x >= 0 && clip.y >= 0 && clip.x + w <= ls.width && clip.y + h <= ls.height
+    const px = fitsInPlace ? clip.x : Math.round((ls.width  - w) / 2)
+    const py = fitsInPlace ? clip.y : Math.round((ls.height - h) / 2)
+
+    // Size the layer to the pasted content rather than the document, so nothing
+    // is cropped when pasting something bigger than the target image.
+    const newLayer = ls.add('Pasted', w, h)
+    newLayer.offsetX = px
+    newLayer.offsetY = py
+    newLayer.putImageData(clip.imageData, 0, 0)
+
     get(historyManager).push({
       description: 'Paste',
       layerId: newLayer.id,
-      dirtyRect: dr,
-      beforePixels: new ArrayBuffer(dr.w * dr.h * 4),  // new layer was blank
-      afterPixels:  newLayer.ctx.getImageData(dr.x, dr.y, dr.w, dr.h).data.buffer.slice(0),
+      dirtyRect: { x: 0, y: 0, w, h },
+      beforePixels: new ArrayBuffer(w * h * 4),  // new layer was blank
+      afterPixels:  newLayer.ctx.getImageData(0, 0, w, h).data.buffer.slice(0),
     } as any)
     bump()
     menuAction.set('render')
@@ -1107,7 +1200,9 @@
     newLs.layers[0].name = 'Selection'
     newLs.layers[0].putImageData(imageData)
     const hm = new HistoryManager()
-    openInNewTab(newLs, hm, 'Selection', null)
+    // Inherit the source folder so the extracted piece exports next to its original.
+    const sourcePath = get(tabs)[get(activeTabIndex)].sourcePath
+    openInNewTab(newLs, hm, 'Selection', null, sourcePath)
   }
 
   function cropToSelection(): void {
@@ -1115,10 +1210,30 @@
     if (!bounds) return
     const { cx0, cy0, cw, ch } = bounds
     const ls = get(layerStack)
+    // Cropping throws away everything outside the rect, so undo needs a full
+    // snapshot of each layer as it stands right now.
+    const entry: HistoryEntry = {
+      description: 'Crop to Selection',
+      selectionBefore: get(selection),
+      selectionAfter: null,
+      crop: {
+        rect: { x: cx0, y: cy0, w: cw, h: ch },
+        widthBefore: ls.width,
+        heightBefore: ls.height,
+        layersBefore: ls.layers.map(l => ({
+          layerId: l.id,
+          width:   l.canvas.width,
+          height:  l.canvas.height,
+          offsetX: l.offsetX,
+          offsetY: l.offsetY,
+          // getImageData already hands back a private copy of the pixels.
+          pixels:  l.getImageData().data.buffer,
+        })),
+      },
+    }
     ls.cropTo(cx0, cy0, cw, ch)
     toolManager.resize(cw, ch)
-    // Destructive op: discard history like rotate/canvas-size do.
-    get(historyManager).clear()
+    get(historyManager).push(entry)
     canvasSize.set({ width: cw, height: ch })
     selection.set(null)
     markCurrentTabDirty()
@@ -1132,7 +1247,9 @@
     const ls = await fileManager.importImageAsNew(path)
     const hm = new HistoryManager()
     const title = path.split(/[\\/]/).pop() ?? 'Untitled'
-    openInNewTab(ls, hm, title, null)
+    // No project file to save back to, but remember where the image came from
+    // so Save As / Export open in that folder.
+    openInNewTab(ls, hm, title, null, path)
   }
 
   async function doImportImage(path: string): Promise<void> {
@@ -1141,10 +1258,19 @@
     menuAction.set('render')
   }
 
+  /** Filename to suggest for a save/export, based on what the tab was opened from. */
+  function suggestedName(extension: string, fallback: string): string {
+    const source = get(tabs)[get(activeTabIndex)].sourcePath
+    const base = source?.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '')
+    return `${base || fallback}.${extension}`
+  }
+
   async function exportImage(): Promise<void> {
-    const path = await window.api.exportDialog('export.png')
+    const idx = get(activeTabIndex)
+    const path = await window.api.exportDialog(suggestedName('png', 'export'), get(tabs)[idx].sourcePath)
     if (!path) return
     await fileManager.exportImage(get(layerStack), path)
+    setTabSourcePath(idx, path)
   }
 </script>
 
@@ -1157,19 +1283,23 @@
       {#if $selection}
         <div class="tool-group">
           <span class="label">X</span>
-          <input type="number" class="param-num param-num--wide"
+          <NumberInput
+            variant="wide"
             bind:value={moveSelDX}
             on:change={e => onMoveSelectionPos('x', e)} />
         </div>
         <div class="tool-group">
           <span class="label">Y</span>
-          <input type="number" class="param-num param-num--wide"
+          <NumberInput
+            variant="wide"
             bind:value={moveSelDY}
             on:change={e => onMoveSelectionPos('y', e)} />
         </div>
         <div class="tool-group">
           <span class="label">{PL.rotate} <Tooltip text={PT.rotateSelection} /></span>
-          <input type="number" class="param-num param-num--wide" step="1"
+          <NumberInput
+            variant="wide"
+            step={1}
             bind:value={moveSelRot}
             on:change={onMoveSelectionRotate} />
           {#if moveTool.hasFloat() && Math.abs(floatAngle) > 0.01}
@@ -1184,13 +1314,15 @@
 
       <div class="tool-group">
         <span class="label">X</span>
-        <input type="number" class="param-num param-num--wide"
+        <NumberInput
+          variant="wide"
           bind:value={moveLayerDX}
           on:change={e => onMoveLayerPos('x', e)} />
       </div>
       <div class="tool-group">
         <span class="label">Y</span>
-        <input type="number" class="param-num param-num--wide"
+        <NumberInput
+          variant="wide"
           bind:value={moveLayerDY}
           on:change={e => onMoveLayerPos('y', e)} />
       </div>
@@ -1200,7 +1332,7 @@
       <div class="tool-group">
         <span class="label">{PL.threshold} <Tooltip text={PT.threshold} /></span>
         <input type="range" min="0" max="255" value={mwThreshold} on:input={onMagicWandParam} />
-        <input type="number" class="param-num" value={mwThreshold} min="0" max="255" on:change={onMagicWandParam} />
+        <NumberInput value={mwThreshold} min={0} max={255} on:change={onMagicWandParam} />
       </div>
 
     {:else if isSelect}
@@ -1222,17 +1354,17 @@
       <div class="tool-group">
         <span class="label">{PL.size} <Tooltip text={PT.size} /></span>
         <input type="range" min="1" max="500" value={bSize} on:input={e => onBlendParam('size', e)} />
-        <input type="number" class="param-num" value={bSize} min="1" max="500" on:change={e => onBlendParam('size', e)} />
+        <NumberInput value={bSize} min={1} max={500} on:change={e => onBlendParam('size', e)} />
       </div>
       <div class="tool-group">
         <span class="label">{PL.hardness} <Tooltip text={PT.hardness} /></span>
         <input type="range" min="0" max="100" value={bHardness} on:input={e => onBlendParam('hardness', e)} />
-        <input type="number" class="param-num" value={bHardness} min="0" max="100" on:change={e => onBlendParam('hardness', e)} />
+        <NumberInput value={bHardness} min={0} max={100} on:change={e => onBlendParam('hardness', e)} />
       </div>
       <div class="tool-group">
         <span class="label">{PL.strength} <Tooltip text={PT.strength} /></span>
         <input type="range" min="1" max="100" value={bStrength} on:input={e => onBlendParam('strength', e)} />
-        <input type="number" class="param-num" value={bStrength} min="1" max="100" on:change={e => onBlendParam('strength', e)} />
+        <NumberInput value={bStrength} min={1} max={100} on:change={e => onBlendParam('strength', e)} />
       </div>
 
     {:else if isSaturation}
@@ -1240,17 +1372,17 @@
       <div class="tool-group">
         <span class="label">{PL.size} <Tooltip text={PT.size} /></span>
         <input type="range" min="1" max="500" value={satSize} on:input={e => onSaturationParam('size', e)} />
-        <input type="number" class="param-num" value={satSize} min="1" max="500" on:change={e => onSaturationParam('size', e)} />
+        <NumberInput value={satSize} min={1} max={500} on:change={e => onSaturationParam('size', e)} />
       </div>
       <div class="tool-group">
         <span class="label">{PL.hardness} <Tooltip text={PT.hardness} /></span>
         <input type="range" min="0" max="100" value={satHardness} on:input={e => onSaturationParam('hardness', e)} />
-        <input type="number" class="param-num" value={satHardness} min="0" max="100" on:change={e => onSaturationParam('hardness', e)} />
+        <NumberInput value={satHardness} min={0} max={100} on:change={e => onSaturationParam('hardness', e)} />
       </div>
       <div class="tool-group">
         <span class="label">{PL.strength} <Tooltip text={PT.strength} /></span>
         <input type="range" min="1" max="100" value={satStrength} on:input={e => onSaturationParam('strength', e)} />
-        <input type="number" class="param-num" value={satStrength} min="1" max="100" on:change={e => onSaturationParam('strength', e)} />
+        <NumberInput value={satStrength} min={1} max={100} on:change={e => onSaturationParam('strength', e)} />
       </div>
       <div class="tool-group tool-group--mode">
         <span class="label">{PL.mode} <Tooltip text={PT.satMode} /></span>
@@ -1265,17 +1397,17 @@
       <div class="tool-group">
         <span class="label">{PL.size} <Tooltip text={PT.size} /></span>
         <input type="range" min="1" max="500" value={dbSize} on:input={e => onDodgeBurnParam('size', e)} />
-        <input type="number" class="param-num" value={dbSize} min="1" max="500" on:change={e => onDodgeBurnParam('size', e)} />
+        <NumberInput value={dbSize} min={1} max={500} on:change={e => onDodgeBurnParam('size', e)} />
       </div>
       <div class="tool-group">
         <span class="label">{PL.hardness} <Tooltip text={PT.hardness} /></span>
         <input type="range" min="0" max="100" value={dbHardness} on:input={e => onDodgeBurnParam('hardness', e)} />
-        <input type="number" class="param-num" value={dbHardness} min="0" max="100" on:change={e => onDodgeBurnParam('hardness', e)} />
+        <NumberInput value={dbHardness} min={0} max={100} on:change={e => onDodgeBurnParam('hardness', e)} />
       </div>
       <div class="tool-group">
         <span class="label">{PL.strength} <Tooltip text={PT.strength} /></span>
         <input type="range" min="1" max="100" value={dbStrength} on:input={e => onDodgeBurnParam('strength', e)} />
-        <input type="number" class="param-num" value={dbStrength} min="1" max="100" on:change={e => onDodgeBurnParam('strength', e)} />
+        <NumberInput value={dbStrength} min={1} max={100} on:change={e => onDodgeBurnParam('strength', e)} />
       </div>
       <div class="tool-group tool-group--mode">
         <span class="label">{PL.mode} <Tooltip text={PT.dodgeMode} /></span>
@@ -1294,7 +1426,7 @@
       <div class="tool-group">
         <span class="label">Tolerance</span>
         <input type="range" min="0" max="255" value={fillTolerance} on:input={e => { fillTolerance = +e.currentTarget.value; fillTool.tolerance = fillTolerance }} />
-        <input type="number" class="param-num" value={fillTolerance} min="0" max="255" on:change={e => { fillTolerance = +e.currentTarget.value; fillTool.tolerance = fillTolerance }} />
+        <NumberInput value={fillTolerance} min={0} max={255} on:change={onFillTolerance} />
       </div>
 
     {:else if isEyedropper}
@@ -1302,7 +1434,7 @@
       <div class="tool-group">
         <span class="label">{PL.sampleSize} <Tooltip text={PT.sampleSize} /></span>
         <input type="range" min="1" max="51" step="2" value={edSampleSize} on:input={onEyedropperParam} />
-        <input type="number" class="param-num" value={edSampleSize} min="1" max="51" step="2" on:change={onEyedropperParam} />
+        <NumberInput value={edSampleSize} min={1} max={51} step={2} on:change={onEyedropperParam} />
       </div>
       <div class="tool-group tool-group--color">
         <span class="label">{PL.pickedColor}</span>
@@ -1323,43 +1455,43 @@
       <div class="tool-group">
         <span class="label">{PL.size} <Tooltip text={PT.size} /></span>
         <input type="range" min="1" max="500" value={size} on:input={e => onParam('size', e)} />
-        <input type="number" class="param-num" value={size} min="1" max="500" on:change={e => onParam('size', e)} />
+        <NumberInput value={size} min={1} max={500} on:change={e => onParam('size', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.opacity} <Tooltip text={PT.opacity} /></span>
         <input type="range" min="1" max="100" value={opacity} on:input={e => onParam('opacity', e)} />
-        <input type="number" class="param-num" value={opacity} min="1" max="100" on:change={e => onParam('opacity', e)} />
+        <NumberInput value={opacity} min={1} max={100} on:change={e => onParam('opacity', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.hardness} <Tooltip text={PT.hardness} /></span>
         <input type="range" min="0" max="100" value={hardness} on:input={e => onParam('hardness', e)} />
-        <input type="number" class="param-num" value={hardness} min="0" max="100" on:change={e => onParam('hardness', e)} />
+        <NumberInput value={hardness} min={0} max={100} on:change={e => onParam('hardness', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.softness} <Tooltip text={PT.softness} /></span>
         <input type="range" min="0" max="100" value={softness} on:input={e => onParam('softness', e)} />
-        <input type="number" class="param-num" value={softness} min="0" max="100" on:change={e => onParam('softness', e)} />
+        <NumberInput value={softness} min={0} max={100} on:change={e => onParam('softness', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.rotation} <Tooltip text={PT.rotation} /></span>
         <input type="range" min="0" max="359" value={rotation} on:input={e => onParam('rotation', e)} />
-        <input type="number" class="param-num" value={rotation} min="0" max="359" on:change={e => onParam('rotation', e)} />
+        <NumberInput value={rotation} min={0} max={359} on:change={e => onParam('rotation', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.thickness} <Tooltip text={PT.thickness} /></span>
         <input type="range" min="1" max="100" value={thickness} on:input={e => onParam('thickness', e)} />
-        <input type="number" class="param-num" value={thickness} min="1" max="100" on:change={e => onParam('thickness', e)} />
+        <NumberInput value={thickness} min={1} max={100} on:change={e => onParam('thickness', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.flow} <Tooltip text={PT.flow} /></span>
         <input type="range" min="0" max="100" value={flow} on:input={e => onParam('flow', e)} />
-        <input type="number" class="param-num" value={flow} min="0" max="100" on:change={e => onParam('flow', e)} />
+        <NumberInput value={flow} min={0} max={100} on:change={e => onParam('flow', e)} />
       </div>
 
       {#if isClone}
@@ -1378,19 +1510,19 @@
       <div class="tool-group">
         <span class="label">{PL.size} <Tooltip text={PT.size} /></span>
         <input type="range" min="1" max="500" value={wSize} on:input={e => onWarpParam('size', e)} />
-        <input type="number" class="param-num" value={wSize} min="1" max="500" on:change={e => onWarpParam('size', e)} />
+        <NumberInput value={wSize} min={1} max={500} on:change={e => onWarpParam('size', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.hardness} <Tooltip text={PT.hardness} /></span>
         <input type="range" min="0" max="100" value={wHardness} on:input={e => onWarpParam('hardness', e)} />
-        <input type="number" class="param-num" value={wHardness} min="0" max="100" on:change={e => onWarpParam('hardness', e)} />
+        <NumberInput value={wHardness} min={0} max={100} on:change={e => onWarpParam('hardness', e)} />
       </div>
 
       <div class="tool-group">
         <span class="label">{PL.strength} <Tooltip text={PT.strength} /></span>
         <input type="range" min="1" max="100" value={wStrength} on:input={e => onWarpParam('strength', e)} />
-        <input type="number" class="param-num" value={wStrength} min="1" max="100" on:change={e => onWarpParam('strength', e)} />
+        <NumberInput value={wStrength} min={1} max={100} on:change={e => onWarpParam('strength', e)} />
       </div>
 
       <div class="tool-group tool-group--mode">
@@ -1547,7 +1679,7 @@
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.contrast}</span>
       <input type="range" min="-100" max="100" bind:value={contrastValue} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={contrastValue} />
+      <NumberInput min={-100} max={100} bind:value={contrastValue} />
     </div>
     <div class="modal-actions">
       <button class="btn" on:click={() => showContrastDialog = false}>Cancel</button>
@@ -1564,7 +1696,7 @@
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.saturation}</span>
       <input type="range" min="-100" max="100" bind:value={satAdjustValue} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={satAdjustValue} />
+      <NumberInput min={-100} max={100} bind:value={satAdjustValue} />
     </div>
     <div class="modal-actions">
       <button class="btn" on:click={() => showSaturationAdjustDialog = false}>Cancel</button>
@@ -1581,17 +1713,17 @@
     <div class="contrast-row">
       <span class="label" style="color:#e07070">R</span>
       <input type="range" min="-100" max="100" bind:value={colorR} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={colorR} />
+      <NumberInput min={-100} max={100} bind:value={colorR} />
     </div>
     <div class="contrast-row">
       <span class="label" style="color:#70e070">G</span>
       <input type="range" min="-100" max="100" bind:value={colorG} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={colorG} />
+      <NumberInput min={-100} max={100} bind:value={colorG} />
     </div>
     <div class="contrast-row">
       <span class="label" style="color:#7070e0">B</span>
       <input type="range" min="-100" max="100" bind:value={colorB} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={colorB} />
+      <NumberInput min={-100} max={100} bind:value={colorB} />
     </div>
     <div class="modal-actions">
       <button class="btn" on:click={() => showColorRGBDialog = false}>Cancel</button>
@@ -1608,7 +1740,7 @@
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.vibrancy}</span>
       <input type="range" min="-100" max="100" bind:value={vibrancyValue} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={vibrancyValue} />
+      <NumberInput min={-100} max={100} bind:value={vibrancyValue} />
     </div>
     <div class="modal-actions">
       <button class="btn" on:click={() => showVibrancyDialog = false}>Cancel</button>
@@ -1625,12 +1757,12 @@
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.temperature}</span>
       <input type="range" min="-100" max="100" bind:value={wbTemperature} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={wbTemperature} />
+      <NumberInput min={-100} max={100} bind:value={wbTemperature} />
     </div>
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.tint}</span>
       <input type="range" min="-100" max="100" bind:value={wbTint} />
-      <input class="param-num" type="number" min="-100" max="100" bind:value={wbTint} />
+      <NumberInput min={-100} max={100} bind:value={wbTint} />
     </div>
     <div class="modal-actions">
       <button class="btn" on:click={() => showWhiteBalanceDialog = false}>Cancel</button>
@@ -1653,9 +1785,9 @@
 
     <div class="resize-grid">
       <div class="resize-label">Width</div>
-      <input class="resize-input" type="number" bind:value={riW} min="1" on:change={onRiWChange} on:input={onRiWChange} />
+      <NumberInput variant="dialog" bind:value={riW} min={1} on:change={onRiWChange} on:input={onRiWChange} />
       <div class="resize-label">Height</div>
-      <input class="resize-input" type="number" bind:value={riH} min="1" on:change={onRiHChange} on:input={onRiHChange} />
+      <NumberInput variant="dialog" bind:value={riH} min={1} on:change={onRiHChange} on:input={onRiHChange} />
     </div>
 
     <label class="ri-constrain">
@@ -1683,13 +1815,13 @@
     <p class="resize-current">Current: {$canvasSize.width} × {$canvasSize.height} px</p>
     <div class="resize-grid">
       <div class="resize-label">Top</div>
-      <input class="resize-input" type="number" bind:value={resizeTop} />
+      <NumberInput variant="dialog" bind:value={resizeTop} />
       <div class="resize-label">Bottom</div>
-      <input class="resize-input" type="number" bind:value={resizeBottom} />
+      <NumberInput variant="dialog" bind:value={resizeBottom} />
       <div class="resize-label">Left</div>
-      <input class="resize-input" type="number" bind:value={resizeLeft} />
+      <NumberInput variant="dialog" bind:value={resizeLeft} />
       <div class="resize-label">Right</div>
-      <input class="resize-input" type="number" bind:value={resizeRight} />
+      <NumberInput variant="dialog" bind:value={resizeRight} />
     </div>
     <p class="resize-result" class:resize-invalid={!resizeValid}>
       New size: {resizeNewW} × {resizeNewH} px
@@ -1774,15 +1906,47 @@
 </div>
 {/if}
 
+{#if showHistoryDialog}
+<div class="modal-backdrop" on:click|self={() => showHistoryDialog = false}>
+  <div class="modal">
+    <h3>{MODAL.historyMemoryTitle}</h3>
+    <p class="modal-msg">{MODAL.historyMemoryMsg}</p>
+    <div class="history-row">
+      <span class="resize-label">Budget per tab</span>
+      <NumberInput
+        variant="dialog"
+        bind:value={pendingHistoryMB}
+        min={HISTORY_BUDGET_MIN_MB}
+        max={HISTORY_BUDGET_MAX_MB}
+        step={64}
+      />
+      <span class="history-unit">MB</span>
+    </div>
+    <p class="resize-current">
+      This tab is holding {historyUsedMB.toFixed(1)} MB in {historySteps} step{historySteps === 1 ? '' : 's'}.
+    </p>
+    {#if !historyBudgetValid}
+      <p class="resize-result resize-invalid">
+        Enter a value between {HISTORY_BUDGET_MIN_MB} and {HISTORY_BUDGET_MAX_MB} MB.
+      </p>
+    {/if}
+    <div class="modal-actions">
+      <button class="btn" on:click={() => showHistoryDialog = false}>Cancel</button>
+      <button class="btn btn-primary" on:click={confirmHistoryBudget} disabled={!historyBudgetValid}>Save</button>
+    </div>
+  </div>
+</div>
+{/if}
+
 {#if showNewDialog}
 <div class="modal-backdrop" on:click|self={() => showNewDialog = false}>
   <div class="modal">
     <h3>{MODAL.newCanvasTitle}</h3>
     <div class="field">
-      <label>Width <input type="number" bind:value={newWidth} min="1" max="16384" /></label>
+      <label>Width <NumberInput variant="dialog" bind:value={newWidth} min={1} max={16384} /></label>
     </div>
     <div class="field">
-      <label>Height <input type="number" bind:value={newHeight} min="1" max="16384" /></label>
+      <label>Height <NumberInput variant="dialog" bind:value={newHeight} min={1} max={16384} /></label>
     </div>
     <div class="modal-actions">
       <button class="btn" on:click={() => showNewDialog = false}>Cancel</button>
@@ -2086,33 +2250,7 @@
     flex-shrink: 0;
   }
 
-  .param-num {
-    width: 100%;
-    box-sizing: border-box;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 5px;
-    color: #d4d4d4;
-    font-size: 11px;
-    padding: 2px 4px;
-    text-align: right;
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  .param-num:focus {
-    outline: none;
-    border-color: rgba(86, 156, 214, 0.7);
-    box-shadow: 0 0 0 2px rgba(86, 156, 214, 0.15);
-  }
-  /* Hide spinner arrows on regular param inputs */
-  .param-num:not(.param-num--wide)::-webkit-outer-spin-button,
-  .param-num:not(.param-num--wide)::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-  /* Wide variant for position inputs — keeps spinner arrows, fits negative coords */
-  .param-num--wide {
-    width: 70px;
-  }
+  /* Number field styling lives in NumberInput.svelte, which owns the markup. */
 
   .tool-group--mode {
     width: 90px;
@@ -2257,17 +2395,6 @@
     color: #aaa;
   }
 
-  .field input[type="number"] {
-    width: 80px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 6px;
-    color: #d4d4d4;
-    padding: 4px 6px;
-    font-size: 12px;
-    text-align: right;
-  }
-
   .resize-current {
     margin: 0;
     font-size: 12px;
@@ -2318,15 +2445,15 @@
     text-align: right;
   }
 
-  .resize-input {
-    width: 80px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 6px;
-    color: #d4d4d4;
-    padding: 4px 6px;
+  .history-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .history-unit {
     font-size: 12px;
-    text-align: right;
+    color: #aaa;
   }
 
   .resize-result {

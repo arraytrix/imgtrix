@@ -60,5 +60,6 @@ export const MENU = {
   // Settings
   settings:        'Settings',
   hotkeys:         'Hotkeys…',
+  historyMemory:   'History Memory…',
   restoreDefaults: 'Restore Defaults',
 } as const

@@ -2,9 +2,10 @@
   import { onMount } from 'svelte'
   import {
     layerStack, historyManager, compositor, toolManager,
-    bump, viewport, zoomPct, menuAction, activeToolName, selection, markCurrentTabDirty
+    bump, viewport, zoomPct, menuAction, activeToolName, selection, canvasSize, markCurrentTabDirty
   } from '../store'
   import type { HistoryEntry } from '../engine/tools/tool'
+  import type { CropChange } from '../engine/history-manager'
   import type { CloneTool } from '../engine/tools/clone'
   import type { MoveTool } from '../engine/tools/move'
   import { invalidateFloatingSelection } from '../engine/tools/move'
@@ -458,10 +459,10 @@
   let isRightDrawing = false
 
   function handlePointerDown(e: PointerEvent): void {
-    // Move focus off any param input so the browser's native Ctrl+Z on the
-    // input doesn't revert typed values when the user later presses undo.
-    // Canvas isn't focusable by default, so a click here normally leaves the
-    // previously-focused input still active.
+    // Commit and drop focus from any param input — the canvas isn't focusable,
+    // so a click here would otherwise leave the field active and typing would
+    // keep going to it. (Ctrl+Z reaching that field is handled separately, in
+    // handleUndoRedoKey; blurring alone does not clear Chromium's undo stack.)
     const active = document.activeElement as HTMLElement | null
     if (active && (active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA')) {
       active.blur()
@@ -554,17 +555,44 @@
     }
     applyLayerPatch(entry.layerId, entry.dirtyRect, entry.beforePixels, entry.afterPixels,
                     entry.offsetBefore, entry.offsetAfter, isUndo)
-    if (entry.extra) {
-      const x = entry.extra
+    for (const x of entry.extras ?? []) {
       applyLayerPatch(x.layerId, x.dirtyRect, x.beforePixels, x.afterPixels,
                       x.offsetBefore, x.offsetAfter, isUndo)
     }
+    if (entry.crop) applyCrop(entry.crop, isUndo)
     requestRender()
     bump()
   }
 
+  /**
+   * Undo a crop by putting every layer back at its old size, offset and
+   * contents; redo by re-running the same crop over that restored state.
+   */
+  function applyCrop(crop: CropChange, isUndo: boolean): void {
+    const ls = $layerStack
+    if (isUndo) {
+      for (const snap of crop.layersBefore) {
+        const layer = ls.layers.find(l => l.id === snap.layerId)
+        if (!layer) continue
+        layer.restoreBuffer(snap.width, snap.height, snap.pixels)
+        layer.offsetX = snap.offsetX
+        layer.offsetY = snap.offsetY
+      }
+      ls.width  = crop.widthBefore
+      ls.height = crop.heightBefore
+    } else {
+      ls.cropTo(crop.rect.x, crop.rect.y, crop.rect.w, crop.rect.h)
+    }
+    toolManager.resize(ls.width, ls.height)
+    canvasSize.set({ width: ls.width, height: ls.height })
+    bump()
+    // The document just changed size under the viewport, as it does when the
+    // crop is first applied — frame it the same way.
+    fitToView()
+  }
+
   function applyLayerPatch(
-    layerId: string,
+    layerId: string | undefined,
     dirtyRect: { x: number; y: number; w: number; h: number } | undefined,
     beforePixels: ArrayBuffer | undefined,
     afterPixels: ArrayBuffer | undefined,
@@ -586,6 +614,72 @@
       if (!pixels) return
       const { x, y, w, h } = dirtyRect
       layer.putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), x, y)
+    }
+  }
+
+  // ---- Undo / redo ---------------------------------------------------------
+
+  function doUndo(): void {
+    if ($historyManager.undo(e => applyHistoryEntry(e, true))) markCurrentTabDirty()
+  }
+
+  function doRedo(): void {
+    if ($historyManager.redo(e => applyHistoryEntry(e, false))) markCurrentTabDirty()
+  }
+
+  // Chromium keeps ONE text-editing undo stack per document, and blurring a
+  // field does not drop its entries. So after typing a brush size (or any
+  // param) into an input, Ctrl+Z is swallowed by the editor: it reverts that
+  // field instead of the drawing, and the menu accelerator never fires because
+  // the renderer already consumed the key. We take the shortcut over here:
+  // preventDefault kills the native editing undo, then we run our own.
+  //
+  // These counters cover the platforms where the menu accelerator fires anyway
+  // (it would arrive right after ours) — one pending count is swallowed per
+  // keypress rather than undoing twice. They decay in case it never arrives.
+  let pendingKeyUndos = 0
+  let pendingKeyRedos = 0
+
+  // Menu-driven undo/redo: a keypress we already handled arrives here as an
+  // echo, so swallow one pending count instead of undoing a second step.
+  function undoFromMenu(): void {
+    if (pendingKeyUndos > 0) { pendingKeyUndos--; return }
+    doUndo()
+  }
+
+  function redoFromMenu(): void {
+    if (pendingKeyRedos > 0) { pendingKeyRedos--; return }
+    doRedo()
+  }
+
+  function isTextEntry(el: Element | null): boolean {
+    if (!el) return false
+    if ((el as HTMLElement).isContentEditable) return true
+    if (el.tagName === 'TEXTAREA') return true
+    if (el.tagName !== 'INPUT') return false
+    // Sliders, checkboxes and colour wells have nothing to undo.
+    return !['range', 'checkbox', 'radio', 'color', 'button', 'submit', 'file']
+      .includes((el as HTMLInputElement).type)
+  }
+
+  function handleUndoRedoKey(e: KeyboardEvent): void {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+    const k = e.key.toLowerCase()
+    if (k !== 'z' && k !== 'y') return
+    // While a field is genuinely being edited, Ctrl+Z belongs to that field.
+    if (isTextEntry(document.activeElement)) return
+
+    e.preventDefault()
+    if (k === 'y') return   // not one of our shortcuts; just don't let it revert a field
+
+    if (e.shiftKey) {
+      pendingKeyRedos++
+      setTimeout(() => { if (pendingKeyRedos > 0) pendingKeyRedos-- }, 300)
+      doRedo()
+    } else {
+      pendingKeyUndos++
+      setTimeout(() => { if (pendingKeyUndos > 0) pendingKeyUndos-- }, 300)
+      doUndo()
     }
   }
 
@@ -624,6 +718,8 @@
 
     // Wheel must be non-passive to allow preventDefault
     canvas.addEventListener('wheel', handleWheel, { passive: false })
+    // Capture phase so the shortcut is ours no matter what has focus.
+    window.addEventListener('keydown', handleUndoRedoKey, true)
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
 
@@ -632,6 +728,7 @@
     return () => {
       cancelAnimationFrame(animFrameId)
       canvas.removeEventListener('wheel', handleWheel)
+      window.removeEventListener('keydown', handleUndoRedoKey, true)
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
       ro.disconnect()
@@ -647,8 +744,8 @@
     : 'none'
 
   $: if ($menuAction) {
-    if ($menuAction === 'undo')     { if ($historyManager.undo(e => applyHistoryEntry(e, true)))  markCurrentTabDirty() }
-    if ($menuAction === 'redo')     { if ($historyManager.redo(e => applyHistoryEntry(e, false))) markCurrentTabDirty() }
+    if ($menuAction === 'undo')     undoFromMenu()
+    if ($menuAction === 'redo')     redoFromMenu()
     if ($menuAction === 'fit-view') fitToView()
     if ($menuAction === 'render')   requestRender()
     menuAction.set(null)

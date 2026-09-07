@@ -354,13 +354,13 @@ export class MoveTool implements Tool {
       afterPixels: hasSourceRect
         ? source.ctx.getImageData(sx0, sy0, sw, sh).data.buffer.slice(0)
         : new ArrayBuffer(0),
-      extra: {
+      extras: [{
         layerId: float.id,
         dirtyRect: { x: 0, y: 0, w: d, h: d },
         // The float layer was blank a moment ago.
         beforePixels: new ArrayBuffer(d * d * 4),
         afterPixels: new ArrayBuffer(0),   // filled in at commit
-      },
+      }],
     }
 
     bump()
@@ -375,9 +375,10 @@ export class MoveTool implements Tool {
     if (lift) {
       // Fold the whole thing — hole, float contents, final placement — into one
       // entry so it undoes as a single step.
-      lift.extra!.afterPixels  = this.captureFloat()
-      lift.extra!.offsetBefore = { x: this.baseOffsetX, y: this.baseOffsetY }
-      lift.extra!.offsetAfter  = offsetAfter
+      const floatPatch = lift.extras![0]
+      floatPatch.afterPixels  = this.captureFloat()
+      floatPatch.offsetBefore = { x: this.baseOffsetX, y: this.baseOffsetY }
+      floatPatch.offsetAfter  = offsetAfter
       lift.selectionBefore = selBefore
       lift.selectionAfter  = selAfter
       return lift
@@ -400,7 +401,7 @@ export class MoveTool implements Tool {
   /** Undo a lift that turned out to be a stray click. */
   private abortLift(ls: LayerStack, lift: HistoryEntry): void {
     const source = this.sourceLayer
-    if (source && lift.beforePixels.byteLength > 0) {
+    if (source && lift.dirtyRect && lift.beforePixels && lift.beforePixels.byteLength > 0) {
       const { x, y, w, h } = lift.dirtyRect
       source.putImageData(new ImageData(new Uint8ClampedArray(lift.beforePixels), w, h), x, y)
     }
