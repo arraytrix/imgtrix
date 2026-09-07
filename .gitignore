@@ -5,3 +5,6 @@ dist/
 *.local
 .env
 .claude/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
