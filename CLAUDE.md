@@ -44,7 +44,7 @@ Tab helpers: `switchTab()`, `newTab()`, `closeTab()`, `openInNewTab()`, `markCur
 
 - **compositor.ts** / **webgl-compositor.ts** — CPU (Canvas2D) and GPU (WebGL) compositing. WebGL is 3–10x faster for multi-layer docs; textures cached per layer, re-uploaded only when `layer.gpuDirty = true`. Fragment shader handles all 12 blend modes in one pass.
 - **layer.ts** / **layer-stack.ts** — Each layer owns an OffscreenCanvas. Layer index 0 = bottom. 12 blend modes. `gpuDirty` flag controls GPU texture invalidation.
-- **history-manager.ts** — Undo/redo with dirty-rect snapshots. 512 MB budget per tab; only stores the affected rect (10–100x smaller than full canvas). Auto-evicts oldest entries.
+- **history-manager.ts** — Undo/redo with dirty-rect snapshots. Memory budget is per tab and user-configurable (Settings → History Memory, default 512 MB, stored as `historyBudgetMB`); only stores the affected rect (10–100x smaller than full canvas). Auto-evicts oldest entries. Crop entries are the exception — they snapshot every layer in full, since cropping discards the pixels outside the rect.
 - **tool-manager.ts** — Dispatches pointer events to the active tool, owns the stroke overlay canvas. Tools return a `HistoryEntry | null` from `onPointerUp`.
 - **tools/** — 14 tools: Pencil, Eraser, Clone, Warp, Blend/Smudge, Saturation, Dodge/Burn, Rect Select, Lasso Select, Magic Wand, Eyedropper, Fill, Move Selection, Move Layer
 - **brush-params.ts** — Shared pressure-sensitive dab drawing used by most paint tools
