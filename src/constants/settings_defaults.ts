@@ -8,6 +8,7 @@ export interface HotkeySettings {
   blend:          string
   saturation:     string
   dodgeBurn:      string
+  recolor:        string
   move:           string
   moveLayer:      string
   rectSelect:     string
@@ -49,6 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     blend:          TOOL_KEYS.blend,
     saturation:     TOOL_KEYS.saturation,
     dodgeBurn:      TOOL_KEYS.dodgeBurn,
+    recolor:        TOOL_KEYS.recolor,
     move:           TOOL_KEYS.move,
     moveLayer:      TOOL_KEYS.moveLayer,
     rectSelect:     TOOL_KEYS.rectSelect,

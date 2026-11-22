@@ -68,6 +68,25 @@ export class Layer {
     this.modified = true
   }
 
+  /** Flip within this layer's bounds, preserving its size and document offset. */
+  mirror(direction: 'vertical' | 'horizontal'): void {
+    const { width, height } = this.canvas
+    const newCanvas = new OffscreenCanvas(width, height)
+    const newCtx = newCanvas.getContext('2d')!
+    if (direction === 'horizontal') {
+      newCtx.translate(width, 0)
+      newCtx.scale(-1, 1)
+    } else {
+      newCtx.translate(0, height)
+      newCtx.scale(1, -1)
+    }
+    newCtx.drawImage(this.canvas, 0, 0)
+    newCtx.resetTransform()
+    this.canvas = newCanvas
+    this.ctx = newCtx
+    this.markDirty()
+  }
+
   rotate(degrees: 90 | 180 | 270): void {
     const W = this.canvas.width
     const H = this.canvas.height

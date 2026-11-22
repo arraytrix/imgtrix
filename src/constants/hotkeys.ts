@@ -6,6 +6,7 @@ export const TOOL_KEYS = {
   blend:       'F',
   saturation:  'U',
   dodgeBurn:   'D',
+  recolor:     'H',
   move:        'V',
   moveLayer:   'G',
   rectSelect:  'S',

@@ -26,6 +26,18 @@ interface LayerMeta {
 }
 
 export class FileManager {
+  /** Save in the format selected by the destination filename. */
+  async saveFile(stack: LayerStack, path: string): Promise<void> {
+    const ext = path.split('.').pop()?.toLowerCase()
+    if (ext === 'img') {
+      await this.saveProject(stack, path)
+    } else if (ext === 'png' || ext === 'jpg' || ext === 'jpeg') {
+      await this.exportImage(stack, path)
+    } else {
+      throw new Error('Choose an .img, .png, .jpg, or .jpeg filename to save.')
+    }
+  }
+
   async saveProject(stack: LayerStack, path: string): Promise<void> {
     const zip = new JSZip()
 

@@ -8,6 +8,7 @@ export const TOOL_NAMES = {
   blend:          'Blend / Smudge',
   saturation:     'Saturation',
   dodgeBurn:      'Lighten / Darken',
+  recolor:        'Recolor Brush',
   move:           'Move Selection',
   moveLayer:      'Move Layer',
   rectSelect:     'Rectangular Select',

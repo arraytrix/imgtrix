@@ -11,10 +11,11 @@ A desktop image editor built with Electron and Svelte. Designed as a solid found
 - **Multi-tab editing** — Work on multiple images simultaneously, each with independent layers, history, and viewport state
 - **Layer system** — Add, remove, reorder, and toggle visibility of layers with 12 blend modes and per-layer opacity
 - **GPU-accelerated compositing** — WebGL renderer composites all visible layers and blend modes in a single shader pass; 3–10× faster than the CPU fallback on multi-layer documents
-- **Brush tools** — Pencil, Eraser, Clone Stamp, Warp (push / twirl / bloat / pucker / reconstruct), Blend/Smudge, Saturation, and Dodge/Burn — all pressure-sensitive for drawing tablets
+- **Brush tools** — Pencil, Eraser, Clone Stamp, Warp (push / twirl / bloat / pucker / reconstruct), Blend/Smudge, Saturation, Dodge/Burn, and Recolor (change color while keeping shading, optionally only where it matches a sampled color) — all pressure-sensitive for drawing tablets
 - **Selection tools** — Rectangular marquee, freehand lasso, and magic wand (color tolerance) with marching-ants preview
 - **Utility tools** — Eyedropper (color pick), Fill (paint bucket), Move Selection contents, Move Layer
 - **Edit operations** — Copy, cut, paste (to new layer), select all, clear selection
+- **Live adjustment previews** — Contrast, Saturation, Vibrancy, White Balance, and Color RGB update the canvas as you change values. Toggle Preview to compare with the original; Apply creates one undo step, while Cancel or Escape restores the original.
 - **Selection to new image** — Extract a selection into its own tab, sized to the selection bounds
 - **Memory-efficient undo / redo** — Per-tab history stores only the affected dirty rect (10–100× smaller than full-canvas snapshots), with a 512 MB budget per tab and automatic eviction of the oldest entries
 - **File support** — Native `.img` project format (ZIP-based, preserves all layers), plus PNG / JPEG / WebP import and export
@@ -75,6 +76,7 @@ imgtrix/
 │           ├── blend.ts         # Smudge/blend brush
 │           ├── saturation.ts    # Saturate / desaturate brush
 │           ├── dodge-burn.ts    # Dodge (lighten) / burn (darken) brush
+│           ├── recolor.ts       # Recolor brush (color / hue / saturation / luminosity)
 │           ├── fill.ts          # Flood-fill / paint bucket
 │           ├── eyedropper.ts    # Color picker
 │           ├── rect-select.ts   # Rectangular marquee selection

@@ -20,6 +20,13 @@ export const DODGE_MODE_LABELS = {
   burn:  'Darken',
 } as const
 
+export const RECOLOR_MODE_LABELS = {
+  color:      'Color',
+  hue:        'Hue',
+  saturation: 'Saturation',
+  luminosity: 'Luminosity',
+} as const
+
 export const WARP_MODE_LABELS = {
   push:        'Push',
   twirl:       'Twirl',

@@ -5,7 +5,7 @@ Sentry.init({
 })
 
 import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
-import { join, dirname } from 'path'
+import { join, dirname, extname } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { readFile, writeFile } from 'fs/promises'
@@ -77,7 +77,14 @@ function buildMenu(): void {
         { type: 'separator' },
         { label: MENU.rotate90CW,  click: () => send('rotate-90-cw') },
         { label: MENU.rotate90CCW, click: () => send('rotate-90-ccw') },
-        { label: MENU.rotate180,   click: () => send('rotate-180') }
+        { label: MENU.rotate180,   click: () => send('rotate-180') },
+        {
+          label: MENU.mirror,
+          submenu: [
+            { label: MENU.mirrorVertical,   click: () => send('mirror-vertical') },
+            { label: MENU.mirrorHorizontal, click: () => send('mirror-horizontal') }
+          ]
+        }
       ]
     },
     {
@@ -253,9 +260,18 @@ function defaultSavePath(defaultName: string, sourcePath: string | null): string
 }
 
 ipcMain.handle('file:save-dialog', async (_e, defaultName: string, sourcePath: string | null = null) => {
+  const filters = [
+    { name: 'Image Editor Project', extensions: ['img'] },
+    { name: 'PNG Image', extensions: ['png'] },
+    { name: 'JPEG Image', extensions: ['jpg', 'jpeg'] }
+  ]
+  // Keep the current save format selected when reopening Save As.
+  const extension = extname(defaultName).slice(1).toLowerCase()
+  const preferred = filters.findIndex(filter => filter.extensions.includes(extension))
+  if (preferred > 0) filters.unshift(...filters.splice(preferred, 1))
   const result = await dialog.showSaveDialog({
     defaultPath: defaultSavePath(defaultName, sourcePath),
-    filters: [{ name: 'Image Editor Project', extensions: ['img'] }]
+    filters
   })
   return result.canceled ? null : result.filePath
 })

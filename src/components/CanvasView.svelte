@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import {
     layerStack, historyManager, compositor, toolManager,
-    bump, viewport, zoomPct, menuAction, activeToolName, selection, canvasSize, markCurrentTabDirty
+    bump, viewport, zoomPct, menuAction, activeToolName, selection, canvasSize, markCurrentTabDirty, adjustmentOpen
   } from '../store'
   import type { HistoryEntry } from '../engine/tools/tool'
   import type { CropChange } from '../engine/history-manager'
@@ -663,6 +663,7 @@
   }
 
   function handleUndoRedoKey(e: KeyboardEvent): void {
+    if ($adjustmentOpen) return
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return
     const k = e.key.toLowerCase()
     if (k !== 'z' && k !== 'y') return
@@ -684,6 +685,7 @@
   }
 
   function handleKeyDown(e: KeyboardEvent): void {
+    if ($adjustmentOpen) return
     if ((e.target as HTMLElement).tagName === 'INPUT') return
     if (e.code === 'Space' && !e.repeat) {
       e.preventDefault()

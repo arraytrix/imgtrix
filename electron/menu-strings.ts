@@ -37,6 +37,9 @@ export const MENU = {
   rotate90CW:         'Rotate 90° Clockwise',
   rotate90CCW:        'Rotate 90° Counter-Clockwise',
   rotate180:          'Rotate 180°',
+  mirror:             'Mirror',
+  mirrorVertical:     'Vertical',
+  mirrorHorizontal:   'Horizontal',
 
   // Adjust
   contrast:      'Contrast…',

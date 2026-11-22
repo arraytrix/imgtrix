@@ -86,10 +86,13 @@ export const viewport: Viewport = { offsetX: 0, offsetY: 0, zoom: 1 }
 export const zoomPct = writable(100)
 
 // Active tool name — drives toolbar highlight
-export const activeToolName = writable<'paintbrush' | 'eraser' | 'clone' | 'warp' | 'blend' | 'saturation' | 'dodge-burn' | 'eyedropper' | 'rect-select' | 'lasso-select' | 'magic-wand' | 'move' | 'move-layer'>('paintbrush')
+export const activeToolName = writable<'paintbrush' | 'eraser' | 'clone' | 'warp' | 'blend' | 'saturation' | 'dodge-burn' | 'recolor' | 'eyedropper' | 'rect-select' | 'lasso-select' | 'magic-wand' | 'move' | 'move-layer'>('paintbrush')
 
 // Menu-triggered actions that need handler context inside CanvasView
 export const menuAction = writable<string | null>(null)
+
+// Adjustment dialogs temporarily own the pixels; block document-edit shortcuts.
+export const adjustmentOpen = writable(false)
 
 // Internal pixel clipboard — shared across tabs
 export interface ClipboardEntry {

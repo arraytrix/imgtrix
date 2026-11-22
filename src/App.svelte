@@ -9,12 +9,14 @@
   import type { HotkeySettings } from './constants/settings_defaults'
   import { HISTORY_BUDGET_MIN_MB, HISTORY_BUDGET_MAX_MB } from './constants/settings_defaults'
   import { PARAM_LABELS as PL, PARAM_TOOLTIPS as PT } from './constants/param-strings'
-  import { HINTS, MODAL, SAT_MODE_LABELS, DODGE_MODE_LABELS, WARP_MODE_LABELS, TAB_LABELS, ADJUST_LABELS } from './constants/ui-strings'
+  import { HINTS, MODAL, SAT_MODE_LABELS, DODGE_MODE_LABELS, RECOLOR_MODE_LABELS, WARP_MODE_LABELS, TAB_LABELS, ADJUST_LABELS } from './constants/ui-strings'
   import { toolManager, layerStack, historyManager, bump, zoomPct, activeToolName, canvasSize, menuAction, selection, clipboard, tabs, activeTabIndex, switchTab, newTab, openInNewTab, closeTab, updateTabMeta, setTabSourcePath, markCurrentTabClean, markCurrentTabDirty } from './store'
   import { LayerStack } from './engine/layer-stack'
   import type { Layer } from './engine/layer'
   import { HistoryManager, extractRect } from './engine/history-manager'
-  import type { HistoryEntry, LayerPatch } from './engine/history-manager'
+  import type { HistoryEntry } from './engine/history-manager'
+  import { AdjustmentPreview, type AdjustmentTransform } from './engine/adjustment-preview'
+  import { adjustmentOpen } from './store'
   import { PencilTool } from './engine/tools/pencil'
   import { EraserTool } from './engine/tools/eraser'
   import { CloneTool } from './engine/tools/clone'
@@ -22,16 +24,17 @@
   import { BlendTool } from './engine/tools/blend'
   import { SaturationTool, type SaturationMode } from './engine/tools/saturation'
   import { DodgeBurnTool, type DodgeBurnMode } from './engine/tools/dodge-burn'
+  import { RecolorTool, type RecolorMode } from './engine/tools/recolor'
   import { RectSelectTool } from './engine/tools/rect-select'
   import { LassoSelectTool } from './engine/tools/lasso-select'
   import { MagicWandTool } from './engine/tools/magic-wand'
-  import { MoveTool } from './engine/tools/move'
+  import { MoveTool, invalidateFloatingSelection } from './engine/tools/move'
   import NumberInput from './components/NumberInput.svelte'
   import { MoveLayerTool } from './engine/tools/move-layer'
   import { EyedropperTool } from './engine/tools/eyedropper'
   import { FillTool } from './engine/tools/fill'
   import { FileManager } from './engine/file-manager'
-  import { onMount, tick } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { initTelemetry, track } from './telemetry'
 
   const fileManager = new FileManager()
@@ -123,41 +126,85 @@
     menuAction.set('render')
   }
 
-  /**
-   * Run a whole-image adjustment over every layer, as one undoable step.
-   *
-   * `transform` mutates a layer's RGBA bytes in place. Adjustments touch the
-   * full layer, so each patch's dirty rect is the whole (layer-local) canvas.
-   */
-  function applyAdjustment(description: string, transform: (d: Uint8ClampedArray) => void): void {
-    const patches: LayerPatch[] = []
-    for (const layer of get(layerStack).layers) {
-      const w = layer.canvas.width
-      const h = layer.canvas.height
-      if (w === 0 || h === 0) continue
-      const imageData = layer.ctx.getImageData(0, 0, w, h)
-      const before = imageData.data.slice().buffer
-      transform(imageData.data)
-      layer.putImageData(imageData)
-      patches.push({
-        layerId: layer.id,
-        dirtyRect: { x: 0, y: 0, w, h },
-        beforePixels: before,
-        afterPixels: imageData.data.slice().buffer,
-      })
-    }
-    if (patches.length === 0) return
+  let adjustmentPreview: AdjustmentPreview | null = null
+  let adjustmentFrame = 0
+  let pendingAdjustment: AdjustmentTransform | null = null
+  let previewEnabled = true
 
-    // HistoryEntry carries the first layer inline and the rest as extras; they
-    // undo and redo together.
-    const [main, ...extras] = patches
+  function focusAdjustment(node: HTMLElement): { destroy: () => void } {
+    const previousFocus = document.activeElement as HTMLElement | null
+    node.querySelector<HTMLInputElement>('input')?.focus()
+    return { destroy: () => previousFocus?.focus() }
+  }
+
+  function beginAdjustment(): void {
+    cancelAdjustment()
+    adjustmentPreview = new AdjustmentPreview(get(layerStack).layers)
+    previewEnabled = true
+    adjustmentOpen.set(true)
+  }
+
+  function queueAdjustment(transform: AdjustmentTransform | null): void {
+    pendingAdjustment = transform
+    if (!adjustmentFrame) adjustmentFrame = requestAnimationFrame(renderAdjustment)
+  }
+
+  function renderAdjustment(): void {
+    adjustmentFrame = 0
+    adjustmentPreview?.update(previewEnabled ? pendingAdjustment : null)
+    menuAction.set('render')
+  }
+
+  function closeAdjustmentDialogs(): void {
+    showContrastDialog = showSaturationAdjustDialog = showVibrancyDialog = false
+    showWhiteBalanceDialog = showColorRGBDialog = false
+    adjustmentOpen.set(false)
+  }
+
+  function cancelAdjustment(): void {
+    cancelAnimationFrame(adjustmentFrame)
+    adjustmentFrame = 0
+    adjustmentPreview?.cancel()
+    adjustmentPreview = null
+    pendingAdjustment = null
+    closeAdjustmentDialogs()
+    menuAction.set('render')
+  }
+
+  function commitAdjustment(description: string): void {
+    cancelAnimationFrame(adjustmentFrame)
+    adjustmentFrame = 0
+    // Flush the latest value even if Apply beats the next frame or Preview is off.
+    adjustmentPreview?.update(pendingAdjustment)
+    const entry = adjustmentPreview?.commit(description)
+    adjustmentPreview = null
+    pendingAdjustment = null
+    if (entry) {
+      invalidateFloatingSelection()
+      get(historyManager).push(entry)
+      bump()
+    }
+    closeAdjustmentDialogs()
+    menuAction.set('render')
+  }
+
+  onDestroy(cancelAdjustment)
+
+  function mirrorActiveLayer(direction: 'vertical' | 'horizontal'): void {
+    const layer = get(layerStack).active
+    const { width: w, height: h } = layer.canvas
+    if (w === 0 || h === 0) return
+
+    // A floating selection must not later re-render its cached, unflipped pixels.
+    invalidateFloatingSelection()
+    const beforePixels = layer.getImageData().data.buffer
+    layer.mirror(direction)
     get(historyManager).push({
-      description,
-      layerId: main.layerId,
-      dirtyRect: main.dirtyRect!,
-      beforePixels: main.beforePixels!,
-      afterPixels: main.afterPixels!,
-      extras,
+      description: direction === 'vertical' ? 'Mirror Vertical' : 'Mirror Horizontal',
+      layerId: layer.id,
+      dirtyRect: { x: 0, y: 0, w, h },
+      beforePixels,
+      afterPixels: layer.getImageData().data.buffer,
     })
     bump()
     menuAction.set('render')
@@ -168,20 +215,23 @@
   let contrastValue = 0  // -100 to +100
 
   function openContrastDialog(): void {
+    beginAdjustment()
     contrastValue = 0
     showContrastDialog = true
   }
 
-  function confirmContrast(): void {
+  $: if (showContrastDialog) previewContrast(contrastValue)
+
+  function previewContrast(contrastValue: number): void {
+    if (!validAdjustmentValues([contrastValue])) return
     const factor = (259 * (contrastValue + 255)) / (255 * (259 - contrastValue))
-    applyAdjustment('Contrast', d => {
+    queueAdjustment(contrastValue === 0 ? null : d => {
       for (let i = 0; i < d.length; i += 4) {
         d[i]     = Math.max(0, Math.min(255, factor * (d[i]     - 128) + 128))
         d[i + 1] = Math.max(0, Math.min(255, factor * (d[i + 1] - 128) + 128))
         d[i + 2] = Math.max(0, Math.min(255, factor * (d[i + 2] - 128) + 128))
       }
     })
-    showContrastDialog = false
   }
 
   // Saturation adjustment dialog
@@ -189,13 +239,17 @@
   let satAdjustValue = 0  // -100 to +100
 
   function openSaturationAdjustDialog(): void {
+    beginAdjustment()
     satAdjustValue = 0
     showSaturationAdjustDialog = true
   }
 
-  function confirmSaturationAdjust(): void {
+  $: if (showSaturationAdjustDialog) previewSaturationAdjust(satAdjustValue)
+
+  function previewSaturationAdjust(satAdjustValue: number): void {
+    if (!validAdjustmentValues([satAdjustValue])) return
     const factor = 1 + satAdjustValue / 100
-    applyAdjustment('Saturation', d => {
+    queueAdjustment(satAdjustValue === 0 ? null : d => {
       for (let i = 0; i < d.length; i += 4) {
         const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
         d[i]     = Math.max(0, Math.min(255, lum + factor * (d[i]     - lum)))
@@ -203,7 +257,6 @@
         d[i + 2] = Math.max(0, Math.min(255, lum + factor * (d[i + 2] - lum)))
       }
     })
-    showSaturationAdjustDialog = false
   }
 
   // Vibrancy adjustment dialog
@@ -211,13 +264,17 @@
   let vibrancyValue = 0  // -100 to +100
 
   function openVibrancyDialog(): void {
+    beginAdjustment()
     vibrancyValue = 0
     showVibrancyDialog = true
   }
 
-  function confirmVibrancy(): void {
+  $: if (showVibrancyDialog) previewVibrancy(vibrancyValue)
+
+  function previewVibrancy(vibrancyValue: number): void {
+    if (!validAdjustmentValues([vibrancyValue])) return
     const strength = vibrancyValue / 100
-    applyAdjustment('Vibrancy', d => {
+    queueAdjustment(vibrancyValue === 0 ? null : d => {
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i + 1], b = d[i + 2]
         const max = Math.max(r, g, b)
@@ -232,7 +289,6 @@
         d[i + 2] = Math.max(0, Math.min(255, lum + factor * (b - lum)))
       }
     })
-    showVibrancyDialog = false
   }
 
   // White balance dialog
@@ -241,15 +297,19 @@
   let wbTint = 0         // -100 (green) to +100 (magenta)
 
   function openWhiteBalanceDialog(): void {
+    beginAdjustment()
     wbTemperature = 0
     wbTint = 0
     showWhiteBalanceDialog = true
   }
 
-  function confirmWhiteBalance(): void {
+  $: if (showWhiteBalanceDialog) previewWhiteBalance(wbTemperature, wbTint)
+
+  function previewWhiteBalance(wbTemperature: number, wbTint: number): void {
+    if (!validAdjustmentValues([wbTemperature, wbTint])) return
     const temp = wbTemperature / 100  // -1 to +1
     const tint = wbTint / 100         // -1 to +1
-    applyAdjustment('White Balance', d => {
+    queueAdjustment(wbTemperature === 0 && wbTint === 0 ? null : d => {
       for (let i = 0; i < d.length; i += 4) {
         // Temperature: warm = boost R, reduce B; cool = boost B, reduce R
         // Tint: magenta = boost R+B, reduce G; green = boost G, reduce R+B
@@ -258,7 +318,6 @@
         d[i + 2] = Math.max(0, Math.min(255, d[i + 2] - temp * 40 + tint * 20))
       }
     })
-    showWhiteBalanceDialog = false
   }
 
   // Merge down confirmation
@@ -354,20 +413,35 @@
   let colorB = 0
 
   function openColorRGBDialog(): void {
+    beginAdjustment()
     colorR = colorG = colorB = 0
     showColorRGBDialog = true
   }
 
-  function confirmColorRGB(): void {
-    applyAdjustment('Color RGB', d => {
+  $: if (showColorRGBDialog) previewColorRGB(colorR, colorG, colorB)
+
+  function previewColorRGB(colorR: number, colorG: number, colorB: number): void {
+    if (!validAdjustmentValues([colorR, colorG, colorB])) return
+    queueAdjustment(colorR === 0 && colorG === 0 && colorB === 0 ? null : d => {
       for (let i = 0; i < d.length; i += 4) {
         d[i]     = Math.max(0, Math.min(255, d[i]     + colorR * 2.55))
         d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + colorG * 2.55))
         d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + colorB * 2.55))
       }
     })
-    showColorRGBDialog = false
   }
+
+  function validAdjustmentValues(values: number[]): boolean {
+    return values.every(value => Number.isFinite(value) && value >= -100 && value <= 100)
+  }
+
+  $: adjustmentValid = validAdjustmentValues(
+    showContrastDialog ? [contrastValue]
+      : showSaturationAdjustDialog ? [satAdjustValue]
+      : showVibrancyDialog ? [vibrancyValue]
+      : showWhiteBalanceDialog ? [wbTemperature, wbTint]
+      : [colorR, colorG, colorB]
+  )
 
   // Canvas size (resize) dialog
   let showCanvasSizeDialog = false
@@ -394,6 +468,7 @@
     { key: 'blend',         label: 'Blend / Smudge' },
     { key: 'saturation',    label: 'Saturation' },
     { key: 'dodgeBurn',     label: 'Lighten / Darken' },
+    { key: 'recolor',       label: 'Recolor Brush' },
     { key: 'rectSelect',    label: 'Rectangular Select' },
     { key: 'lasso',         label: 'Freehand Select' },
     { key: 'magicWand',     label: 'Magic Wand' },
@@ -482,6 +557,7 @@
   const blendTool       = new BlendTool()
   const saturationTool  = new SaturationTool()
   const dodgeBurnTool   = new DodgeBurnTool()
+  const recolorTool     = new RecolorTool()
   const rectSelectTool  = new RectSelectTool()
   const lassoSelectTool = new LassoSelectTool()
   const magicWandTool   = new MagicWandTool()
@@ -494,6 +570,7 @@
     colorHex = `#${toHex(r)}${toHex(g)}${toHex(b)}`
     paintbrushTool.color = [r, g, b, 255]
     fillTool.color = [r, g, b, 255]
+    recolorTool.color = [r, g, b, 255]
   }
 
   // Per-tool UI state (kept separate so params persist when switching tools)
@@ -527,6 +604,13 @@
   let dbHardness = Math.round(dodgeBurnTool.hardness * 100)
   let dbStrength = dodgeBurnTool.strength
 
+  let rcMode: RecolorMode = recolorTool.mode
+  let rcSize      = recolorTool.size
+  let rcHardness  = Math.round(recolorTool.hardness * 100)
+  let rcStrength  = recolorTool.strength
+  let rcMatch     = recolorTool.matchColor
+  let rcTolerance = recolorTool.tolerance
+
   // Only ping the main process when the answer actually changes — it rebuilds
   // the native menu, and a move drag replaces the selection object every frame.
   let hadSelection: boolean | null = null
@@ -545,6 +629,7 @@
   $: isBlend       = $activeToolName === 'blend'
   $: isSaturation  = $activeToolName === 'saturation'
   $: isDodgeBurn   = $activeToolName === 'dodge-burn'
+  $: isRecolor     = $activeToolName === 'recolor'
   $: isMagicWand   = $activeToolName === 'magic-wand'
   $: isMove        = $activeToolName === 'move'
   $: isMoveLayer    = $activeToolName === 'move-layer'
@@ -675,6 +760,29 @@
     dodgeBurnTool.mode = dbMode
   }
 
+  function selectRecolor(): void {
+    toolManager.setTool(recolorTool)
+    activeToolName.set('recolor')
+  }
+
+  function onRecolorParam(param: 'size' | 'hardness' | 'strength' | 'tolerance', e: Event): void {
+    const v = Number((e.target as HTMLInputElement).value)
+    if (param === 'size')      { rcSize      = Math.max(1, Math.min(500, v)); recolorTool.size      = rcSize }
+    if (param === 'hardness')  { rcHardness  = Math.max(0, Math.min(100, v)); recolorTool.hardness  = rcHardness / 100 }
+    if (param === 'strength')  { rcStrength  = Math.max(1, Math.min(100, v)); recolorTool.strength  = rcStrength }
+    if (param === 'tolerance') { rcTolerance = Math.max(0, Math.min(255, v)); recolorTool.tolerance = rcTolerance }
+  }
+
+  function onRecolorMode(e: Event): void {
+    rcMode = (e.target as HTMLSelectElement).value as RecolorMode
+    recolorTool.mode = rcMode
+  }
+
+  function onRecolorMatch(e: Event): void {
+    rcMatch = (e.target as HTMLInputElement).checked
+    recolorTool.matchColor = rcMatch
+  }
+
   function selectWarp(): void {
     toolManager.setTool(warpTool)
     activeToolName.set('warp')
@@ -800,6 +908,7 @@
     const b = parseInt(hex.slice(5, 7), 16)
     paintbrushTool.color = [r, g, b, 255]
     fillTool.color = [r, g, b, 255]
+    recolorTool.color = [r, g, b, 255]
   }
 
   onMount(async () => {
@@ -835,9 +944,13 @@
 
     // Subsequent "Open with" launches arrive via the single-instance bridge —
     // open them as a new tab in this window instead of spawning another process.
-    window.api.onOpenFile((path) => { void openImagePath(path, false) })
+    window.api.onOpenFile((path) => { cancelAdjustment(); void openImagePath(path, false) })
 
     function handleKey(e: KeyboardEvent): void {
+      if (get(adjustmentOpen)) {
+        if (e.key === 'Escape') { e.preventDefault(); cancelAdjustment() }
+        return
+      }
       if ((e.target as HTMLElement).tagName === 'INPUT') return
       const k = e.key.toUpperCase()
       const hk = $settings.hotkeys
@@ -848,6 +961,7 @@
       if (k === hk.blend.toUpperCase())          selectBlend()
       if (k === hk.saturation.toUpperCase())     selectSaturation()
       if (k === hk.dodgeBurn.toUpperCase())      selectDodgeBurn()
+      if (k === hk.recolor.toUpperCase())        selectRecolor()
       if (k === hk.rectSelect.toUpperCase())     selectRectSelect()
       if (k === hk.lasso.toUpperCase())          selectLasso()
       if (k === hk.magicWand.toUpperCase())      selectMagicWand()
@@ -860,6 +974,7 @@
     window.addEventListener('keydown', handleKey)
 
     window.api.onBeforeClose(() => {
+      cancelAdjustment()
       track('session_end', { duration_ms: Date.now() - sessionStart })
       if (get(tabs).some(t => t.isDirty)) {
         appClosePending = true
@@ -869,6 +984,7 @@
     })
 
     window.api.onMenuAction(async (action) => {
+      if (get(adjustmentOpen)) return
       const trackableActions = new Set(['new', 'open', 'import', 'import-new', 'save', 'save-as', 'export', 'undo', 'redo', 'new-layer', 'duplicate-layer', 'merge-down', 'merge-all', 'resize-image', 'canvas-size', 'selection-to-new-image', 'crop-to-selection'])
       if (trackableActions.has(action)) track('feature_used', { feature: action })
 
@@ -891,6 +1007,8 @@
       if (action === 'fit-view') menuAction.set('fit-view')
       if (action === 'canvas-size') openCanvasSizeDialog()
       if (action === 'resize-image') openResizeImageDialog()
+      if (action === 'mirror-vertical') mirrorActiveLayer('vertical')
+      if (action === 'mirror-horizontal') mirrorActiveLayer('horizontal')
       if (action === 'new-layer') { get(layerStack).add(); bump() }
       if (action === 'delete-layer') {
         const ls = get(layerStack)
@@ -958,7 +1076,7 @@
   async function save(): Promise<void> {
     const tab = get(tabs)[get(activeTabIndex)]
     if (tab.filePath) {
-      await fileManager.saveProject(get(layerStack), tab.filePath)
+      await fileManager.saveFile(get(layerStack), tab.filePath)
       markCurrentTabClean()
     } else {
       await saveAs()
@@ -966,10 +1084,11 @@
   }
 
   async function saveAs(): Promise<void> {
-    const sourcePath = get(tabs)[get(activeTabIndex)].sourcePath
-    const path = await window.api.saveDialog(suggestedName('img', 'untitled'), sourcePath)
+    const tab = get(tabs)[get(activeTabIndex)]
+    const extension = tab.filePath?.split('.').pop()?.toLowerCase() ?? 'img'
+    const path = await window.api.saveDialog(suggestedName(extension, 'untitled'), tab.sourcePath)
     if (!path) return
-    await fileManager.saveProject(get(layerStack), path)
+    await fileManager.saveFile(get(layerStack), path)
     const title = path.split(/[\\/]/).pop() ?? 'Untitled'
     updateTabMeta(get(activeTabIndex), title, path)
     markCurrentTabClean()
@@ -1274,7 +1393,7 @@
   }
 </script>
 
-<div class="app">
+<div class="app" inert={$adjustmentOpen}>
   <header class="toolbar">
     <span class="app-name">Imgtrix</span>
 
@@ -1416,6 +1535,52 @@
           <option value="burn">{DODGE_MODE_LABELS.burn}</option>
         </select>
       </div>
+
+    {:else if isRecolor}
+
+      <div class="tool-group tool-group--color">
+        <span class="label">{PL.color} <Tooltip text={PT.brushColor} /></span>
+        <input type="color" value={colorHex} on:input={onColorChange} title={PT.brushColor} />
+      </div>
+      <div class="divider" />
+      <div class="tool-group">
+        <span class="label">{PL.size} <Tooltip text={PT.size} /></span>
+        <input type="range" min="1" max="500" value={rcSize} on:input={e => onRecolorParam('size', e)} />
+        <NumberInput value={rcSize} min={1} max={500} on:change={e => onRecolorParam('size', e)} />
+      </div>
+      <div class="tool-group">
+        <span class="label">{PL.hardness} <Tooltip text={PT.hardness} /></span>
+        <input type="range" min="0" max="100" value={rcHardness} on:input={e => onRecolorParam('hardness', e)} />
+        <NumberInput value={rcHardness} min={0} max={100} on:change={e => onRecolorParam('hardness', e)} />
+      </div>
+      <div class="tool-group">
+        <span class="label">{PL.strength} <Tooltip text={PT.recolorStrength} /></span>
+        <input type="range" min="1" max="100" value={rcStrength} on:input={e => onRecolorParam('strength', e)} />
+        <NumberInput value={rcStrength} min={1} max={100} on:change={e => onRecolorParam('strength', e)} />
+      </div>
+      <div class="tool-group tool-group--mode">
+        <span class="label">{PL.mode} <Tooltip text={PT.recolorMode} /></span>
+        <select class="mode-select" value={rcMode} on:change={onRecolorMode}>
+          <option value="color">{RECOLOR_MODE_LABELS.color}</option>
+          <option value="hue">{RECOLOR_MODE_LABELS.hue}</option>
+          <option value="saturation">{RECOLOR_MODE_LABELS.saturation}</option>
+          <option value="luminosity">{RECOLOR_MODE_LABELS.luminosity}</option>
+        </select>
+      </div>
+      <div class="divider" />
+      <div class="tool-group tool-group--trace">
+        <span class="label">{PL.matchColor} <Tooltip text={PT.matchColor} /></span>
+        <label class="trace-label">
+          <input type="checkbox" checked={rcMatch} on:change={onRecolorMatch} />
+        </label>
+      </div>
+      {#if rcMatch}
+      <div class="tool-group">
+        <span class="label">{PL.tolerance} <Tooltip text={PT.tolerance} /></span>
+        <input type="range" min="0" max="255" value={rcTolerance} on:input={e => onRecolorParam('tolerance', e)} />
+        <NumberInput value={rcTolerance} min={0} max={255} on:change={e => onRecolorParam('tolerance', e)} />
+      </div>
+      {/if}
 
     {:else if isFill}
 
@@ -1595,6 +1760,10 @@
         on:click={selectDodgeBurn} title={toolTitle('dodgeBurn')}
       >◑</button>
       <button
+        class="tool-btn tool-btn-lg" class:active={$activeToolName === 'recolor'}
+        on:click={selectRecolor} title={toolTitle('recolor')}
+      >◐</button>
+      <button
         class="tool-btn tool-btn-lg" class:active={$activeToolName === 'move'}
         on:click={selectMove} title={toolTitle('move')}
       ><span style="line-height:1">✥</span></button>
@@ -1673,43 +1842,51 @@
 {/if}
 
 {#if showContrastDialog}
-<div class="modal-backdrop" on:click|self={() => showContrastDialog = false}>
-  <div class="modal">
-    <h3>{MODAL.contrastTitle}</h3>
+<div class="modal-backdrop adjustment-backdrop" role="presentation" on:click|self={cancelAdjustment}>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adjustment-title" tabindex="-1" use:focusAdjustment>
+    <h3 id="adjustment-title">{MODAL.contrastTitle}</h3>
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.contrast}</span>
       <input type="range" min="-100" max="100" bind:value={contrastValue} />
       <NumberInput min={-100} max={100} bind:value={contrastValue} />
     </div>
+    <label class="adjustment-preview-toggle">
+      <input type="checkbox" bind:checked={previewEnabled} on:change={() => queueAdjustment(pendingAdjustment)} />
+      Preview
+    </label>
     <div class="modal-actions">
-      <button class="btn" on:click={() => showContrastDialog = false}>Cancel</button>
-      <button class="btn btn-primary" on:click={confirmContrast}>Apply</button>
+      <button class="btn" on:click={cancelAdjustment}>Cancel</button>
+      <button class="btn btn-primary" disabled={!adjustmentValid} on:click={() => commitAdjustment('Contrast')}>Apply</button>
     </div>
   </div>
 </div>
 {/if}
 
 {#if showSaturationAdjustDialog}
-<div class="modal-backdrop" on:click|self={() => showSaturationAdjustDialog = false}>
-  <div class="modal">
-    <h3>{MODAL.saturationTitle}</h3>
+<div class="modal-backdrop adjustment-backdrop" role="presentation" on:click|self={cancelAdjustment}>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adjustment-title" tabindex="-1" use:focusAdjustment>
+    <h3 id="adjustment-title">{MODAL.saturationTitle}</h3>
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.saturation}</span>
       <input type="range" min="-100" max="100" bind:value={satAdjustValue} />
       <NumberInput min={-100} max={100} bind:value={satAdjustValue} />
     </div>
+    <label class="adjustment-preview-toggle">
+      <input type="checkbox" bind:checked={previewEnabled} on:change={() => queueAdjustment(pendingAdjustment)} />
+      Preview
+    </label>
     <div class="modal-actions">
-      <button class="btn" on:click={() => showSaturationAdjustDialog = false}>Cancel</button>
-      <button class="btn btn-primary" on:click={confirmSaturationAdjust}>Apply</button>
+      <button class="btn" on:click={cancelAdjustment}>Cancel</button>
+      <button class="btn btn-primary" disabled={!adjustmentValid} on:click={() => commitAdjustment('Saturation')}>Apply</button>
     </div>
   </div>
 </div>
 {/if}
 
 {#if showColorRGBDialog}
-<div class="modal-backdrop" on:click|self={() => showColorRGBDialog = false}>
-  <div class="modal">
-    <h3>{MODAL.colorRGBTitle}</h3>
+<div class="modal-backdrop adjustment-backdrop" role="presentation" on:click|self={cancelAdjustment}>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adjustment-title" tabindex="-1" use:focusAdjustment>
+    <h3 id="adjustment-title">{MODAL.colorRGBTitle}</h3>
     <div class="contrast-row">
       <span class="label" style="color:#e07070">R</span>
       <input type="range" min="-100" max="100" bind:value={colorR} />
@@ -1725,35 +1902,43 @@
       <input type="range" min="-100" max="100" bind:value={colorB} />
       <NumberInput min={-100} max={100} bind:value={colorB} />
     </div>
+    <label class="adjustment-preview-toggle">
+      <input type="checkbox" bind:checked={previewEnabled} on:change={() => queueAdjustment(pendingAdjustment)} />
+      Preview
+    </label>
     <div class="modal-actions">
-      <button class="btn" on:click={() => showColorRGBDialog = false}>Cancel</button>
-      <button class="btn btn-primary" on:click={confirmColorRGB}>Apply</button>
+      <button class="btn" on:click={cancelAdjustment}>Cancel</button>
+      <button class="btn btn-primary" disabled={!adjustmentValid} on:click={() => commitAdjustment('Color RGB')}>Apply</button>
     </div>
   </div>
 </div>
 {/if}
 
 {#if showVibrancyDialog}
-<div class="modal-backdrop" on:click|self={() => showVibrancyDialog = false}>
-  <div class="modal">
-    <h3>{MODAL.vibrancyTitle}</h3>
+<div class="modal-backdrop adjustment-backdrop" role="presentation" on:click|self={cancelAdjustment}>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adjustment-title" tabindex="-1" use:focusAdjustment>
+    <h3 id="adjustment-title">{MODAL.vibrancyTitle}</h3>
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.vibrancy}</span>
       <input type="range" min="-100" max="100" bind:value={vibrancyValue} />
       <NumberInput min={-100} max={100} bind:value={vibrancyValue} />
     </div>
+    <label class="adjustment-preview-toggle">
+      <input type="checkbox" bind:checked={previewEnabled} on:change={() => queueAdjustment(pendingAdjustment)} />
+      Preview
+    </label>
     <div class="modal-actions">
-      <button class="btn" on:click={() => showVibrancyDialog = false}>Cancel</button>
-      <button class="btn btn-primary" on:click={confirmVibrancy}>Apply</button>
+      <button class="btn" on:click={cancelAdjustment}>Cancel</button>
+      <button class="btn btn-primary" disabled={!adjustmentValid} on:click={() => commitAdjustment('Vibrancy')}>Apply</button>
     </div>
   </div>
 </div>
 {/if}
 
 {#if showWhiteBalanceDialog}
-<div class="modal-backdrop" on:click|self={() => showWhiteBalanceDialog = false}>
-  <div class="modal">
-    <h3>{MODAL.whiteBalTitle}</h3>
+<div class="modal-backdrop adjustment-backdrop" role="presentation" on:click|self={cancelAdjustment}>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adjustment-title" tabindex="-1" use:focusAdjustment>
+    <h3 id="adjustment-title">{MODAL.whiteBalTitle}</h3>
     <div class="contrast-row">
       <span class="label">{ADJUST_LABELS.temperature}</span>
       <input type="range" min="-100" max="100" bind:value={wbTemperature} />
@@ -1764,9 +1949,13 @@
       <input type="range" min="-100" max="100" bind:value={wbTint} />
       <NumberInput min={-100} max={100} bind:value={wbTint} />
     </div>
+    <label class="adjustment-preview-toggle">
+      <input type="checkbox" bind:checked={previewEnabled} on:change={() => queueAdjustment(pendingAdjustment)} />
+      Preview
+    </label>
     <div class="modal-actions">
-      <button class="btn" on:click={() => showWhiteBalanceDialog = false}>Cancel</button>
-      <button class="btn btn-primary" on:click={confirmWhiteBalance}>Apply</button>
+      <button class="btn" on:click={cancelAdjustment}>Cancel</button>
+      <button class="btn btn-primary" disabled={!adjustmentValid} on:click={() => commitAdjustment('White Balance')}>Apply</button>
     </div>
   </div>
 </div>
@@ -2358,6 +2547,28 @@
     align-items: center;
     justify-content: center;
     z-index: 100;
+  }
+
+  .adjustment-backdrop {
+    background: transparent;
+    backdrop-filter: none;
+    align-items: flex-start;
+    justify-content: flex-end;
+    padding: 72px 20px 20px;
+  }
+
+  .adjustment-backdrop .modal {
+    width: 360px;
+    max-width: calc(100vw - 88px);
+  }
+
+  .adjustment-preview-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #aaa;
+    font-size: 12px;
+    cursor: pointer;
   }
 
   .modal {
