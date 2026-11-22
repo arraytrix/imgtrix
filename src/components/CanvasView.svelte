@@ -187,11 +187,11 @@
     const mask    = clonePreviewMask!
     const maskCtx = mask.getContext('2d')!
 
-    // Sample from the active layer (matches CloneTool.drawDab's sampleCanvas behaviour:
-    // doc-space coords used directly as layer-canvas coords).
+    // Sample from the active layer, mapping doc space to the layer buffer
+    // (matches CloneTool.drawDab).
     const layer = $layerStack.active
     dabCtx.clearRect(0, 0, d, d)
-    dabCtx.drawImage(layer.canvas, srcX - r, srcY - r, d, d, 0, 0, d, d)
+    dabCtx.drawImage(layer.canvas, srcX - layer.offsetX - r, srcY - layer.offsetY - r, d, d, 0, 0, d, d)
 
     // Hardness mask, identical to the real dab path
     maskCtx.clearRect(0, 0, d, d)

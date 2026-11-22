@@ -19,7 +19,6 @@ export class CloneTool implements Tool {
 
   private sourceOffset:  { x: number; y: number } | null = null
   traceOffset:   { x: number; y: number } | null = null
-  private sampleCanvas:  OffscreenCanvas | null = null
   private dabCanvas:     OffscreenCanvas | null = null
   private maskCanvas:    OffscreenCanvas | null = null
   private beforeSnapshot: ImageData | null = null
@@ -55,10 +54,10 @@ export class CloneTool implements Tool {
       }
     }
 
-    // Snapshot active layer so we always sample the pre-stroke pixels
-    const { canvas } = context.activeLayer
-    this.sampleCanvas = new OffscreenCanvas(canvas.width, canvas.height)
-    this.sampleCanvas.getContext('2d')!.drawImage(canvas, 0, 0)
+    // No full-layer copy needed: dabs stage on strokeCanvas and only reach the
+    // layer in onPointerUp, so the layer itself holds the pre-stroke pixels for
+    // the whole stroke. (A full copy cost an extra W×H canvas per stroke, which
+    // can fail to allocate on very large images.)
 
     // Pre-allocate reusable dab/mask canvases sized to current brush
     const dabDiam = Math.ceil(this.size) * 2
@@ -131,18 +130,20 @@ export class CloneTool implements Tool {
   }
 
   private drawDab(x: number, y: number, context: ToolContext): void {
-    if (!this.sampleCanvas || !this.sourceOffset) return
+    if (!this.dabCanvas || !this.sourceOffset) return
 
-    const srcX = x + this.sourceOffset.x
-    const srcY = y + this.sourceOffset.y
+    const layer = context.activeLayer
+    // Source is in document space; the layer buffer is offset by (offsetX, offsetY).
+    const srcX = x + this.sourceOffset.x - layer.offsetX
+    const srcY = y + this.sourceOffset.y - layer.offsetY
     const r    = this.size / 2
     const d    = Math.ceil(r * 2)
 
-    // Sample from snapshot into the reusable dab canvas
-    const temp    = this.dabCanvas!
+    // Sample the (still pre-stroke) layer into the reusable dab canvas
+    const temp    = this.dabCanvas
     const tempCtx = temp.getContext('2d')!
     tempCtx.clearRect(0, 0, d, d)
-    tempCtx.drawImage(this.sampleCanvas, srcX - r, srcY - r, d, d, 0, 0, d, d)
+    tempCtx.drawImage(layer.canvas, srcX - r, srcY - r, d, d, 0, 0, d, d)
 
     // Build a hardness-based circular mask in the reusable mask canvas
     const mask    = this.maskCanvas!
@@ -162,9 +163,13 @@ export class CloneTool implements Tool {
     }
     maskCtx.fill()
 
-    // Punch mask into the sample via destination-in
+    // Punch mask into the sample via destination-in. save/restore matters: the
+    // dab canvas is reused for every dab in the stroke, and a lingering
+    // 'destination-in' makes the next dab's sample draw onto nothing.
+    tempCtx.save()
     tempCtx.globalCompositeOperation = 'destination-in'
     tempCtx.drawImage(mask, 0, 0)
+    tempCtx.restore()
 
     // Blit to strokeCanvas, applying softness blur, rotation, and thickness at draw time
     const { strokeCtx } = context
@@ -208,7 +213,6 @@ export class CloneTool implements Tool {
 
   private reset(): void {
     this.beforeSnapshot = null
-    this.sampleCanvas = null
     this.dabCanvas    = null
     this.maskCanvas   = null
     this.sourceOffset = null
