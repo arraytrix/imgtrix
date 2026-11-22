@@ -163,6 +163,10 @@ function makeProgram(gl: WebGL2RenderingContext): WebGLProgram {
 
 interface FBO { fbo: WebGLFramebuffer; tex: WebGLTexture }
 
+// Largest region (in pixels) copied into the presentation canvas per frame —
+// well under Chromium's WebGL drawing-buffer cap (~33.5 MP).
+const PRESENT_MAX_PIXELS = 4096 * 4096
+
 // ─── WebGLCompositor ─────────────────────────────────────────────────────────
 export class WebGLCompositor {
   // Intermediate OffscreenCanvas used for GPU compositing
@@ -174,6 +178,8 @@ export class WebGLCompositor {
   // Ping-pong FBOs (sized to document canvas)
   private fboA: FBO | null = null
   private fboB: FBO | null = null
+  // Whichever ping-pong FBO holds the finished composite after compositeGL()
+  private result: FBO | null = null
   private docW = 0
   private docH = 0
 
@@ -206,9 +212,10 @@ export class WebGLCompositor {
 
     if (this.gl) return true
 
-    // First-time init
+    // First-time init. The canvas (default framebuffer) is only a presentation
+    // surface sized per frame in presentGL(); compositing happens in FBOs.
     try {
-      this.glCanvas = new OffscreenCanvas(docW, docH)
+      this.glCanvas = new OffscreenCanvas(1, 1)
       const gl = this.glCanvas.getContext('webgl2', {
         premultipliedAlpha: true,
         preserveDrawingBuffer: true,
@@ -269,12 +276,14 @@ export class WebGLCompositor {
     const gl = this.gl!
     this.docW = w
     this.docH = h
+    this.result = null
 
-    // Resize glCanvas
-    if (this.glCanvas) {
-      this.glCanvas.width  = w
-      this.glCanvas.height = h
-    }
+    // The glCanvas is deliberately NOT sized to the document. Chromium caps a
+    // WebGL drawing buffer at ~33.5 MP when an existing canvas is resized
+    // (9600×7168 came back as 6665×4977), and a clamped buffer silently showed
+    // only the bottom-left of the document, stretched to fill the view — so
+    // strokes appeared far from where they were painted. FBO textures are
+    // bounded only by MAX_TEXTURE_SIZE.
 
     const mkFBO = (): FBO => {
       const tex = gl.createTexture()!
@@ -434,10 +443,7 @@ export class WebGLCompositor {
       }
     }
 
-    // Blit final accumulation to glCanvas default framebuffer
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, curr.fbo)
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null)
-    gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+    this.result = curr
 
     // Layer textures are cached — do not delete them. Only clean up the stroke texture.
     if (strokeTex) gl.deleteTexture(strokeTex)
@@ -497,7 +503,60 @@ export class WebGLCompositor {
     this.drawChecker(ctx, sx, sy, sw, sh)
 
     // Draw the WebGL-composited result.
-    ctx.drawImage(this.glCanvas!, sx, sy, sw, sh)
+    this.presentGL(ctx, target, vp)
+  }
+
+  /**
+   * Copy the visible part of the composite into the (small) glCanvas and draw
+   * it onto the display canvas. Only the on-screen region is presented, at
+   * document resolution when it fits under PRESENT_MAX_PIXELS and downscaled
+   * (bilinear, ≤2× per axis for typical docs) otherwise; drawImage does the
+   * remaining scale to screen exactly as before.
+   */
+  private presentGL(
+    ctx: CanvasRenderingContext2D,
+    target: HTMLCanvasElement,
+    vp: { offsetX: number; offsetY: number; zoom: number }
+  ): void {
+    const gl = this.gl!, glCanvas = this.glCanvas!, src = this.result
+    if (!src) return
+    const W = this.docW, H = this.docH, z = vp.zoom
+
+    // Visible document rect, in whole document pixels
+    const dx0 = Math.max(0, Math.floor(-vp.offsetX / z))
+    const dy0 = Math.max(0, Math.floor(-vp.offsetY / z))
+    const dx1 = Math.min(W, Math.ceil((target.width  - vp.offsetX) / z))
+    const dy1 = Math.min(H, Math.ceil((target.height - vp.offsetY) / z))
+    if (dx1 <= dx0 || dy1 <= dy0) return
+    const dw = dx1 - dx0, dh = dy1 - dy0
+
+    const s  = Math.min(1, Math.sqrt(PRESENT_MAX_PIXELS / (dw * dh)))
+    const bw = Math.max(1, Math.round(dw * s))
+    const bh = Math.max(1, Math.round(dh * s))
+
+    // Grow-only so panning doesn't reallocate the drawing buffer every frame
+    if (glCanvas.width < bw || glCanvas.height < bh) {
+      glCanvas.width  = Math.max(glCanvas.width,  bw)
+      glCanvas.height = Math.max(glCanvas.height, bh)
+    }
+    const cw = gl.drawingBufferWidth, ch = gl.drawingBufferHeight
+    if (cw < bw || ch < bh) {
+      // Should not happen under PRESENT_MAX_PIXELS; never present a wrong region.
+      console.warn(`WebGL present buffer clamped to ${cw}x${ch} (wanted ${bw}x${bh})`)
+      return
+    }
+
+    // FBO rows are stored bottom-up (doc row r at GL y = H-1-r), and the canvas
+    // image's top row is GL y = ch-1 — so place the blit at the top of the buffer.
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, src.fbo)
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null)
+    gl.blitFramebuffer(
+      dx0, H - dy1, dx1, H - dy0,
+      0, ch - bh, bw, ch,
+      gl.COLOR_BUFFER_BIT, s < 1 ? gl.LINEAR : gl.NEAREST
+    )
+
+    ctx.drawImage(glCanvas, 0, 0, bw, bh, vp.offsetX + dx0 * z, vp.offsetY + dy0 * z, dw * z, dh * z)
   }
 
   // ─── CPU fallback (identical to original Compositor) ──────────────────────

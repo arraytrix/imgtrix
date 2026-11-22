@@ -62,6 +62,12 @@ export class WarpWebGL {
   private vao: WebGLVertexArrayObject | null = null
   private snapshotTex: WebGLTexture | null = null
   private dispTex: WebGLTexture | null = null
+  // Render target. The canvas stays 1×1: Chromium clamps a resized WebGL
+  // drawing buffer to ~33.5 MP, and readPixels outside it returns zeros, which
+  // would have erased warped pixels on large documents. FBO textures are only
+  // bounded by MAX_TEXTURE_SIZE.
+  private outTex: WebGLTexture | null = null
+  private outFbo: WebGLFramebuffer | null = null
   private uInvSize: WebGLUniformLocation | null = null
 
   private W = 0
@@ -125,14 +131,29 @@ export class WarpWebGL {
       if (sizeChanged) {
         this.W = W
         this.H = H
-        this.glCanvas!.width  = W
-        this.glCanvas!.height = H
         gl.viewport(0, 0, W, H)
         gl.uniform2f(this.uInvSize!, 1.0 / W, 1.0 / H)
 
         // Free old textures; they'll be recreated below
         if (this.snapshotTex) { gl.deleteTexture(this.snapshotTex); this.snapshotTex = null }
         if (this.dispTex)     { gl.deleteTexture(this.dispTex);     this.dispTex     = null }
+        if (this.outFbo)      { gl.deleteFramebuffer(this.outFbo);  this.outFbo      = null }
+        if (this.outTex)      { gl.deleteTexture(this.outTex);      this.outTex      = null }
+      }
+
+      if (!this.outFbo) {
+        this.outTex = gl.createTexture()!
+        gl.activeTexture(gl.TEXTURE2)
+        gl.bindTexture(gl.TEXTURE_2D, this.outTex)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+        this.outFbo = gl.createFramebuffer()!
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.outFbo)
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.outTex, 0)
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+          throw new Error('warp render target incomplete')
+        }
       }
 
       // Upload snapshot (always fresh — it's the layer state before this stroke)
@@ -200,6 +221,7 @@ export class WarpWebGL {
     if (!this.strokeReady) return null
     const gl = this.gl!
 
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.outFbo)
     gl.useProgram(this.program)
     gl.bindVertexArray(this.vao)
     gl.activeTexture(gl.TEXTURE0)
@@ -228,12 +250,16 @@ export class WarpWebGL {
     if (!gl) return
     if (this.snapshotTex) gl.deleteTexture(this.snapshotTex)
     if (this.dispTex)     gl.deleteTexture(this.dispTex)
-    if (this.program)     gl.deleteProgram(this.program)
+    if (this.outFbo)      gl.deleteFramebuffer(this.outFbo)
+    if (this.outTex)      gl.deleteTexture(this.outTex)
+    if (this.program)    gl.deleteProgram(this.program)
     if (this.vao)         gl.deleteVertexArray(this.vao)
     this.gl           = null
     this.glCanvas     = null
     this.snapshotTex  = null
     this.dispTex      = null
+    this.outFbo       = null
+    this.outTex       = null
     this.program      = null
     this.vao          = null
     this.contextReady = false
