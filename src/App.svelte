@@ -1338,7 +1338,7 @@
     {:else if isSelect}
 
       {#if $selection}
-        {#if $selection.type === 'rect'}
+        {#if $selection.type === 'rect' || $selection.type === 'mask'}
           <span class="sel-info">{$selection.w} × {$selection.h} px</span>
           <span class="sel-info sel-info--muted">at {$selection.x}, {$selection.y}</span>
         {:else}
