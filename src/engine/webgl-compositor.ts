@@ -534,16 +534,28 @@ export class WebGLCompositor {
     const bw = Math.max(1, Math.round(dw * s))
     const bh = Math.max(1, Math.round(dh * s))
 
-    // Grow-only so panning doesn't reallocate the drawing buffer every frame
+    // Grow-only so panning doesn't reallocate the drawing buffer every frame —
+    // but growing each axis independently can blow the area past the cap
+    // (a wide doc followed by a tall one gave 4738×7005 ≈ 33.2 MP, clamped,
+    // and nothing was drawn). If the grown size would exceed the budget,
+    // size the buffer exactly instead; bw×bh is always ≤ PRESENT_MAX_PIXELS.
     if (glCanvas.width < bw || glCanvas.height < bh) {
-      glCanvas.width  = Math.max(glCanvas.width,  bw)
-      glCanvas.height = Math.max(glCanvas.height, bh)
+      let nw = Math.max(glCanvas.width,  bw)
+      let nh = Math.max(glCanvas.height, bh)
+      if (nw * nh > PRESENT_MAX_PIXELS) { nw = bw; nh = bh }
+      glCanvas.width  = nw
+      glCanvas.height = nh
     }
-    const cw = gl.drawingBufferWidth, ch = gl.drawingBufferHeight
+    let cw = gl.drawingBufferWidth, ch = gl.drawingBufferHeight
     if (cw < bw || ch < bh) {
-      // Should not happen under PRESENT_MAX_PIXELS; never present a wrong region.
-      console.warn(`WebGL present buffer clamped to ${cw}x${ch} (wanted ${bw}x${bh})`)
-      return
+      // Clamped anyway (e.g. GPU memory pressure): retry at the exact size.
+      glCanvas.width  = bw
+      glCanvas.height = bh
+      cw = gl.drawingBufferWidth; ch = gl.drawingBufferHeight
+      if (cw < bw || ch < bh) {
+        console.warn(`WebGL present buffer clamped to ${cw}x${ch} (wanted ${bw}x${bh})`)
+        return
+      }
     }
 
     // FBO rows are stored bottom-up (doc row r at GL y = H-1-r), and the canvas
